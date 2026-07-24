@@ -20,6 +20,8 @@ enum KbPrefs {
     static let spaceTrackpad   = "kb.spaceTrackpad"
     static let sound           = "kb.sound"
     static let haptics         = "kb.haptics"
+    static let punctLeft       = "kb.punctLeft"
+    static let punctRight      = "kb.punctRight"
 
     static func double(_ key: String, default def: Double) -> Double {
         store.object(forKey: key) as? Double ?? def
@@ -44,6 +46,8 @@ enum KbPrefs {
         var trackpad: Bool
         var sound: Bool
         var haptics: Bool
+        var punctLeft: String
+        var punctRight: String
 
         static func load() -> Config {
             Config(height: KbPrefs.double(KbPrefs.height, default: 330),
@@ -59,7 +63,9 @@ enum KbPrefs {
                    accents: KbPrefs.bool(KbPrefs.longPressAccents, default: true),
                    trackpad: KbPrefs.bool(KbPrefs.spaceTrackpad, default: true),
                    sound: KbPrefs.bool(KbPrefs.sound, default: false),
-                   haptics: KbPrefs.bool(KbPrefs.haptics, default: true))
+                   haptics: KbPrefs.bool(KbPrefs.haptics, default: true),
+                   punctLeft: KbPrefs.store.string(forKey: KbPrefs.punctLeft) ?? ",",
+                   punctRight: KbPrefs.store.string(forKey: KbPrefs.punctRight) ?? ".")
         }
     }
 }
