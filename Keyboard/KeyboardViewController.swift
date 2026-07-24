@@ -2,80 +2,904 @@ import UIKit
 import SwiftUI
 import SwiftData
 
-// MARK: - Vista contenedora con clic de teclado del sistema
+// MARK: - Contenedor con clic de teclado del sistema
 
 final class FeedbackHostView: UIInputView, UIInputViewAudioFeedback {
     var enableInputClicksWhenVisible: Bool { true }
 }
 
-// MARK: - Puente UIKit ↔ SwiftUI
+// MARK: - Especificación de tecla
 
-final class KeyboardBridge {
-    weak var controller: KeyboardViewController?
-    var lexiconWords: [String] = []
-    var config = KbPrefs.Config.load()
+enum KeyKind { case char, shift, backspace, mode, globe, space, ret, comma, period }
+
+struct KeySpec {
+    var value: String
+    var kind: KeyKind
+    var widthFactor: CGFloat = 1
+    var variants: [String] = []
+}
+
+// MARK: - Controlador (UIKit puro para máxima respuesta)
+
+final class KeyboardViewController: UIInputViewController {
+
+    enum ShiftState { case off, on, caps }
+    enum Mode { case keys, clipboard, emoji }
+
+    private var config = KbPrefs.Config.load()
+    private var shift: ShiftState = .on
+    private var symbolsMode = false
+    private var mode: Mode = .keys
+
+    private var lexicon: [String] = []
+    private var lastCommittedWord = ""
+    private var lastShiftTap = Date.distantPast
+    private var lastSpaceTap = Date.distantPast
+    private var pendingRevert: String?
+    private var deleteTimer: Timer?
+    private var suggestionWork: DispatchWorkItem?
 
     private let haptic = UIImpactFeedbackGenerator(style: .light)
 
-    var hasFullAccess: Bool { controller?.hasFullAccess ?? false }
-    var needsSwitchKey: Bool { controller?.needsInputModeSwitchKey ?? true }
+    // UI
+    private var root: FeedbackHostView!
+    private let topBar = UIView()
+    private let clipboardButton = UIButton(type: .system)
+    private let emojiButton = UIButton(type: .system)
+    private var suggestionButtons: [UIButton] = []
+    private let keyboardArea = UIView()
+    private var keyViews: [KeyRowView] = []
+    private var rows: [[KeySpec]] = []
+    private var panelHost: UIHostingController<AnyView>?
 
-    func insert(_ text: String) { controller?.textDocumentProxy.insertText(text) }
-    func deleteBackward() { controller?.textDocumentProxy.deleteBackward() }
-    func contextBefore() -> String { controller?.textDocumentProxy.documentContextBeforeInput ?? "" }
-    func adjustCursor(_ offset: Int) { controller?.textDocumentProxy.adjustTextPosition(byCharacterOffset: offset) }
-    func nextKeyboard() { controller?.advanceToNextInputMode() }
+    // Popup central reutilizable
+    private let popup = UILabel()
+
+    // MARK: Ciclo de vida
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        config = KbPrefs.Config.load()
+        haptic.prepare()
+
+        requestSupplementaryLexicon { [weak self] lex in
+            DispatchQueue.main.async { self?.lexicon = lex.entries.map { $0.documentText } }
+        }
+
+        root = FeedbackHostView(frame: view.bounds, inputViewStyle: .keyboard)
+        root.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(root)
+        NSLayoutConstraint.activate([
+            root.topAnchor.constraint(equalTo: view.topAnchor),
+            root.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            root.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            root.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+
+        let h = view.heightAnchor.constraint(equalToConstant: CGFloat(config.height))
+        h.priority = .defaultHigh
+        h.isActive = true
+
+        setupTopBar()
+
+        keyboardArea.clipsToBounds = false
+        root.addSubview(keyboardArea)
+
+        popup.textAlignment = .center
+        popup.font = .systemFont(ofSize: CGFloat(config.fontSize) + 12, weight: .medium)
+        popup.backgroundColor = UIColor.systemGray3
+        popup.layer.cornerRadius = 9
+        popup.layer.masksToBounds = true
+        popup.isHidden = true
+        popup.isUserInteractionEnabled = false
+        root.addSubview(popup)
+
+        rebuildKeys()
+        precomputeChecker()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // Recarga preferencias por si cambiaron en la app.
+        config = KbPrefs.Config.load()
+        popup.font = .systemFont(ofSize: CGFloat(config.fontSize) + 12, weight: .medium)
+        if let h = view.constraints.first(where: { $0.firstAttribute == .height }) {
+            h.constant = CGFloat(config.height)
+        }
+        rebuildKeys()
+        updateShiftFromContext()
+        if mode == .keys { showKeyboard() }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        layoutAll()
+    }
+
+    // MARK: Barra superior
+
+    private func setupTopBar() {
+        root.addSubview(topBar)
+
+        clipboardButton.setImage(UIImage(systemName: "doc.on.clipboard"), for: .normal)
+        clipboardButton.tintColor = .label
+        clipboardButton.addTarget(self, action: #selector(toggleClipboard), for: .touchDown)
+        topBar.addSubview(clipboardButton)
+
+        emojiButton.setImage(UIImage(systemName: "face.smiling"), for: .normal)
+        emojiButton.tintColor = .label
+        emojiButton.addTarget(self, action: #selector(toggleEmoji), for: .touchDown)
+        topBar.addSubview(emojiButton)
+
+        for _ in 0..<3 {
+            let b = UIButton(type: .system)
+            b.titleLabel?.font = .systemFont(ofSize: 17)
+            b.setTitleColor(.label, for: .normal)
+            b.addTarget(self, action: #selector(tapSuggestion(_:)), for: .touchDown)
+            topBar.addSubview(b)
+            suggestionButtons.append(b)
+        }
+    }
+
+    // MARK: Construcción de teclas
+
+    private func makeRows() -> [[KeySpec]] {
+        var result: [[KeySpec]] = []
+
+        if config.numberRow {
+            result.append("1234567890".map { KeySpec(value: String($0), kind: .char) })
+        }
+
+        if symbolsMode {
+            result.append(["@","#","$","_","&","-","+","(",")","/"].map {
+                KeySpec(value: $0, kind: .char, variants: KbData.keyVariants[$0] ?? [])
+            })
+            result.append(["*","\"","'",":",";","!","?","¿","¡","%"].map {
+                KeySpec(value: $0, kind: .char, variants: KbData.keyVariants[$0] ?? [])
+            })
+            var third: [KeySpec] = ["=","<",">","{","}","[","]"].map { KeySpec(value: $0, kind: .char) }
+            third.append(KeySpec(value: "", kind: .backspace, widthFactor: 1.4))
+            result.append(third)
+        } else {
+            result.append("qwertyuiop".map {
+                KeySpec(value: String($0), kind: .char, variants: variants(for: String($0)))
+            })
+            result.append("asdfghjklñ".map {
+                KeySpec(value: String($0), kind: .char, variants: variants(for: String($0)))
+            })
+            var third: [KeySpec] = [KeySpec(value: "", kind: .shift, widthFactor: 1.4)]
+            third += "zxcvbnm".map {
+                KeySpec(value: String($0), kind: .char, variants: variants(for: String($0)))
+            }
+            third.append(KeySpec(value: "", kind: .backspace, widthFactor: 1.4))
+            result.append(third)
+        }
+
+        var bottom: [KeySpec] = [KeySpec(value: symbolsMode ? "ABC" : "123", kind: .mode, widthFactor: 1.3)]
+        if needsInputModeSwitchKey {
+            bottom.append(KeySpec(value: "", kind: .globe, widthFactor: 1.0))
+        }
+        bottom.append(KeySpec(value: ",", kind: .comma, widthFactor: 1.0))
+        bottom.append(KeySpec(value: "", kind: .space, widthFactor: 5.0))
+        bottom.append(KeySpec(value: ".", kind: .period, widthFactor: 1.0))
+        bottom.append(KeySpec(value: "", kind: .ret, widthFactor: 1.6))
+        result.append(bottom)
+
+        return result
+    }
+
+    private func variants(for key: String) -> [String] {
+        config.accents ? (KbData.keyVariants[key] ?? []) : []
+    }
+
+    private func rebuildKeys() {
+        keyViews.forEach { $0.removeFromSuperview() }
+        keyViews.removeAll()
+        rows = makeRows()
+
+        for row in rows {
+            let rowView = KeyRowView(specs: row, controller: self)
+            keyboardArea.addSubview(rowView)
+            keyViews.append(rowView)
+        }
+        updateKeyCaps()
+        view.setNeedsLayout()
+    }
+
+    private func updateKeyCaps() {
+        let upper = shift != .off && !symbolsMode
+        for rowView in keyViews { rowView.applyShift(upper) }
+    }
+
+    // MARK: Layout manual (rellena toda la altura, sin márgenes)
+
+    private func layoutAll() {
+        let W = root.bounds.width
+        let H = root.bounds.height
+        guard W > 0, H > 0 else { return }
+
+        let topH: CGFloat = 40
+        topBar.frame = CGRect(x: 0, y: 0, width: W, height: topH)
+
+        let btn: CGFloat = 44
+        clipboardButton.frame = CGRect(x: 4, y: 3, width: btn, height: 34)
+        emojiButton.frame = CGRect(x: W - btn - 4, y: 3, width: btn, height: 34)
+        let sugX = clipboardButton.frame.maxX + 4
+        let sugW = (emojiButton.frame.minX - 4 - sugX) / 3
+        for (i, b) in suggestionButtons.enumerated() {
+            b.frame = CGRect(x: sugX + CGFloat(i) * sugW, y: 3, width: sugW, height: 34)
+        }
+
+        let areaY = topH
+        let areaH = H - topH
+        keyboardArea.frame = CGRect(x: 0, y: areaY, width: W, height: areaH)
+        panelHost?.view.frame = keyboardArea.frame
+
+        // Distribuye las filas para rellenar la altura disponible.
+        let rowCount = CGFloat(keyViews.count)
+        let rowSpacing: CGFloat = 6
+        let pad: CGFloat = 3
+        let usableH = areaH - rowSpacing * (rowCount - 1) - 4
+        let rowH = max(min(usableH / rowCount, 64), 34)
+        let totalH = rowH * rowCount + rowSpacing * (rowCount - 1)
+        var y = max((areaH - totalH) / 2, 2)
+
+        for rowView in keyViews {
+            rowView.frame = CGRect(x: 0, y: y, width: W, height: rowH)
+            rowView.layoutKeys(sidePadding: pad, spacing: 5, fontSize: CGFloat(config.fontSize))
+            y += rowH + rowSpacing
+        }
+    }
+
+    // MARK: Popup de tecla
+
+    func showPopup(for keyView: KeyView, text: String) {
+        guard config.keyPopup, keyView.spec.kind == .char, !text.isEmpty else { return }
+        popup.text = text
+        popup.sizeToFit()
+        let kf = keyView.convert(keyView.bounds, to: root)
+        let w = max(kf.width * 1.25, popup.bounds.width + 18)
+        let hgt = kf.height + 12
+        var x = kf.midX - w / 2
+        x = min(max(x, 3), root.bounds.width - w - 3)   // no sale de los márgenes
+        let yTop = max(kf.minY - hgt - 4, 2)
+        popup.frame = CGRect(x: x, y: yTop, width: w, height: hgt)
+        popup.isHidden = false
+        root.bringSubviewToFront(popup)
+    }
+
+    func hidePopup() { popup.isHidden = true }
+
+    // MARK: Acciones de tecla
 
     func keyFeedback() {
         if config.haptics { haptic.impactOccurred() }
         if config.sound { UIDevice.current.playInputClick() }
     }
-}
 
-final class KeyboardViewController: UIInputViewController {
+    func insertChar(_ base: String) {
+        keyFeedback()
+        let upper = shift != .off && !symbolsMode
+        textDocumentProxy.insertText(upper ? base.uppercased() : base)
+        if shift == .on && !symbolsMode {
+            shift = .off
+            updateKeyCaps()
+        }
+        pendingRevert = nil
+        scheduleSuggestions()
+    }
 
-    private let bridge = KeyboardBridge()
+    /// Reemplaza el último carácter insertado por una variante acentuada.
+    func replaceLastWithVariant(_ variant: String) {
+        textDocumentProxy.deleteBackward()
+        textDocumentProxy.insertText(variant)
+        scheduleSuggestions()
+    }
 
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        bridge.controller = self
-        bridge.config = KbPrefs.Config.load()
+    func handleShift() {
+        keyFeedback()
+        let now = Date()
+        if now.timeIntervalSince(lastShiftTap) < 0.3 {
+            shift = .caps
+        } else {
+            shift = shift == .off ? .on : .off
+        }
+        lastShiftTap = now
+        updateKeyCaps()
+    }
 
-        requestSupplementaryLexicon { [weak self] lexicon in
-            DispatchQueue.main.async {
-                self?.bridge.lexiconWords = lexicon.entries.map { $0.documentText }
+    func backspaceDown() {
+        keyFeedback()
+        textDocumentProxy.deleteBackward()
+        scheduleSuggestions()
+        deleteTimer?.invalidate()
+        deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
+            self?.deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.06, repeats: true) { _ in
+                self?.textDocumentProxy.deleteBackward()
             }
         }
+    }
 
-        let container = FeedbackHostView(frame: .zero, inputViewStyle: .keyboard)
-        container.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(container)
+    func backspaceUp() {
+        deleteTimer?.invalidate()
+        deleteTimer = nil
+        scheduleSuggestions()
+    }
 
-        let host = UIHostingController(rootView: KeyboardRootView(bridge: bridge))
-        addChild(host)
-        container.addSubview(host.view)
-        host.view.translatesAutoresizingMaskIntoConstraints = false
-        host.view.backgroundColor = .clear
+    func toggleSymbols() {
+        keyFeedback()
+        symbolsMode.toggle()
+        rebuildKeys()
+    }
 
-        NSLayoutConstraint.activate([
-            container.topAnchor.constraint(equalTo: view.topAnchor),
-            container.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            container.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            container.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            host.view.topAnchor.constraint(equalTo: container.topAnchor),
-            host.view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            host.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            host.view.trailingAnchor.constraint(equalTo: container.trailingAnchor)
-        ])
-        host.didMove(toParent: self)
+    func switchKeyboard() { advanceToNextInputMode() }
 
-        let height = view.heightAnchor.constraint(equalToConstant: CGFloat(bridge.config.height))
-        height.priority = .defaultHigh
-        height.isActive = true
+    func spaceTap() {
+        let now = Date()
+        let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        if config.doubleSpace,
+           now.timeIntervalSince(lastSpaceTap) < 0.4,
+           before.hasSuffix(" "),
+           before.dropLast().last?.isLetter == true {
+            textDocumentProxy.deleteBackward()
+            commit(".")
+            textDocumentProxy.insertText(" ")
+            if config.autoCapital { shift = .on; updateKeyCaps() }
+        } else {
+            commit(" ")
+        }
+        lastSpaceTap = now
+    }
+
+    func moveCursor(_ offset: Int) {
+        textDocumentProxy.adjustTextPosition(byCharacterOffset: offset)
+    }
+
+    func returnTap() { commit("\n") }
+    func commaTap() { commit(",") }
+    func periodTap() { commit(".") }
+
+    /// Cierra la palabra: autocorrección + aprendizaje + separador.
+    private func commit(_ separator: String) {
+        keyFeedback()
+        let word = currentWord()
+        pendingRevert = nil
+
+        if !word.isEmpty {
+            var finalWord = word
+            if config.autocorrect, let fix = autocorrection(for: word) {
+                replaceCurrentWord(with: fix)
+                pendingRevert = word
+                finalWord = fix
+            }
+            if config.learnWords {
+                WordLearner.learn(finalWord)
+                if !lastCommittedWord.isEmpty {
+                    WordLearner.learnBigram(previous: lastCommittedWord, next: finalWord)
+                }
+            }
+            lastCommittedWord = finalWord
+        }
+
+        textDocumentProxy.insertText(separator)
+
+        if separator == "." || separator == "\n" {
+            if config.autoCapital { shift = .on; updateKeyCaps() }
+            lastCommittedWord = ""
+        } else {
+            updateShiftFromContext()
+        }
+        scheduleSuggestions()
+    }
+
+    private func updateShiftFromContext() {
+        guard config.autoCapital, shift != .caps else { return }
+        let before = (textDocumentProxy.documentContextBeforeInput ?? "")
+            .trimmingCharacters(in: .whitespaces)
+        let newShift: ShiftState =
+            (before.isEmpty || before.hasSuffix(".") || before.hasSuffix("!") || before.hasSuffix("?"))
+            ? .on : (shift == .caps ? .caps : .off)
+        if newShift != shift { shift = newShift; updateKeyCaps() }
+    }
+
+    // MARK: Sugerencias y corrección
+
+    private func precomputeChecker() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let c = UITextChecker()
+            _ = c.completions(forPartialWordRange: NSRange(location: 0, length: 2),
+                              in: "ho", language: "es_ES")
+            _ = c.completions(forPartialWordRange: NSRange(location: 0, length: 2),
+                              in: "he", language: "en_US")
+        }
+    }
+
+    private func scheduleSuggestions() {
+        guard config.prediction else { setSuggestions([]); return }
+        suggestionWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.computeSuggestions() }
+        suggestionWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01, execute: work)
+    }
+
+    private func computeSuggestions() {
+        let word = currentWord()
+        if word.isEmpty { setSuggestions(nextWordSuggestions(), revert: nil); return }
+
+        guard word.count >= 2, word.rangeOfCharacter(from: .letters) != nil else {
+            setSuggestions([]); return
+        }
+        let lower = word.lowercased()
+        let capitalize = word.first?.isUppercase == true
+        var results = WordLearner.matches(prefix: lower, limit: 2)
+
+        for entry in lexicon where entry.lowercased().hasPrefix(lower) {
+            results.append(entry)
+            if results.count >= 4 { break }
+        }
+        let checker = UITextChecker()
+        let range = NSRange(location: 0, length: word.utf16.count)
+        for language in ["es_ES", "en_US"] {
+            if let c = checker.completions(forPartialWordRange: range, in: word, language: language) {
+                results.append(contentsOf: c)
+            }
+            if results.count >= 12 { break }
+        }
+        var seen = Set<String>(); var unique: [String] = []
+        for cand in results {
+            let k = cand.lowercased()
+            guard k != lower, !seen.contains(k) else { continue }
+            seen.insert(k)
+            unique.append(capitalize ? cand.prefix(1).uppercased() + cand.dropFirst() : cand)
+            if unique.count == 3 { break }
+        }
+        setSuggestions(unique)
+    }
+
+    private func nextWordSuggestions() -> [String] {
+        var r: [String] = []
+        if !lastCommittedWord.isEmpty { r += WordLearner.successors(of: lastCommittedWord) }
+        for w in KbData.commonWords {
+            if r.count >= 3 { break }
+            if !r.contains(w) { r.append(w) }
+        }
+        let cap = shift != .off
+        return Array(r.prefix(3)).map { cap ? $0.prefix(1).uppercased() + $0.dropFirst() : $0 }
+    }
+
+    private func setSuggestions(_ words: [String], revert: String? = nil) {
+        let showRevert = revert ?? pendingRevert
+        var titles = words
+        if let showRevert, mode == .keys {
+            titles = ["↺ " + showRevert] + Array(words.prefix(2))
+        }
+        for (i, b) in suggestionButtons.enumerated() {
+            if i < titles.count {
+                b.setTitle(titles[i], for: .normal)
+                b.isHidden = false
+            } else {
+                b.setTitle(nil, for: .normal)
+                b.isHidden = true
+            }
+        }
+    }
+
+    @objc private func tapSuggestion(_ sender: UIButton) {
+        guard let title = sender.title(for: .normal) else { return }
+        keyFeedback()
+        if title.hasPrefix("↺ ") {
+            undoCorrection(to: String(title.dropFirst(2)))
+            return
+        }
+        let current = currentWord()
+        for _ in 0..<current.count { textDocumentProxy.deleteBackward() }
+        textDocumentProxy.insertText(title + " ")
+        if config.learnWords {
+            WordLearner.learn(title)
+            if !lastCommittedWord.isEmpty && !current.isEmpty {
+                WordLearner.learnBigram(previous: lastCommittedWord, next: title)
+            }
+        }
+        lastCommittedWord = title
+        pendingRevert = nil
+        updateShiftFromContext()
+        setSuggestions(nextWordSuggestions())
+    }
+
+    private func autocorrection(for word: String) -> String? {
+        guard word.count >= 3, word.count <= 20,
+              word.rangeOfCharacter(from: .decimalDigits) == nil,
+              word != word.uppercased(),
+              !WordLearner.isKnown(word) else { return nil }
+        let checker = UITextChecker()
+        let range = NSRange(location: 0, length: word.utf16.count)
+        for language in ["es_ES", "en_US"] {
+            let m = checker.rangeOfMisspelledWord(in: word, range: range,
+                                                  startingAt: 0, wrap: false, language: language)
+            if m.location == NSNotFound { return nil }
+        }
+        for language in ["es_ES", "en_US"] {
+            if let guesses = checker.guesses(forWordRange: range, in: word, language: language) {
+                for g in guesses.prefix(3) where !g.contains(" ") {
+                    if abs(g.count - word.count) <= 2 && g.lowercased() != word.lowercased() {
+                        return word.first?.isUppercase == true
+                            ? g.prefix(1).uppercased() + g.dropFirst() : g
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    private func undoCorrection(to original: String) {
+        let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        guard let last = before.last else { return }
+        let sep = String(last)
+        let corrected = wordBefore(String(before.dropLast()))
+        for _ in 0..<(corrected.count + 1) { textDocumentProxy.deleteBackward() }
+        textDocumentProxy.insertText(original + sep)
+        WordLearner.learn(original)
+        pendingRevert = nil
+        scheduleSuggestions()
+    }
+
+    private func replaceCurrentWord(with replacement: String) {
+        let current = currentWord()
+        for _ in 0..<current.count { textDocumentProxy.deleteBackward() }
+        textDocumentProxy.insertText(replacement)
+    }
+
+    private func currentWord() -> String { wordBefore(textDocumentProxy.documentContextBeforeInput ?? "") }
+
+    private func wordBefore(_ text: String) -> String {
+        let sep = CharacterSet.whitespacesAndNewlines
+            .union(CharacterSet(charactersIn: ".,;:!?¿¡\"'()[]{}"))
+        if let r = text.rangeOfCharacter(from: sep, options: .backwards) {
+            return String(text[r.upperBound...])
+        }
+        return text
+    }
+
+    // MARK: Paneles (portapapeles / emoji en SwiftUI, no críticos para latencia)
+
+    @objc private func toggleClipboard() {
+        keyFeedback()
+        mode = (mode == .clipboard) ? .keys : .clipboard
+        refreshMode()
+    }
+
+    @objc private func toggleEmoji() {
+        keyFeedback()
+        mode = (mode == .emoji) ? .keys : .emoji
+        refreshMode()
+    }
+
+    private func refreshMode() {
+        clipboardButton.tintColor = mode == .clipboard ? .tintColor : .label
+        emojiButton.tintColor = mode == .emoji ? .tintColor : .label
+        switch mode {
+        case .keys:      showKeyboard()
+        case .clipboard: showPanel(AnyView(clipboardPanel()))
+        case .emoji:     showPanel(AnyView(EmojiPanel(insert: { [weak self] e in
+                                            self?.textDocumentProxy.insertText(e)
+                                            EmojiStore.registerRecent(e)
+                                            self?.keyFeedback()
+                                        },
+                                        backToKeys: { [weak self] in self?.mode = .keys; self?.refreshMode() },
+                                        deleteBackward: { [weak self] in self?.textDocumentProxy.deleteBackward() })))
+        }
+    }
+
+    private func showKeyboard() {
+        panelHost?.view.isHidden = true
+        keyboardArea.isHidden = false
+        suggestionButtons.forEach { $0.isHidden = ($0.title(for: .normal) == nil) }
+        scheduleSuggestions()
+    }
+
+    private func showPanel(_ v: AnyView) {
+        keyboardArea.isHidden = true
+        suggestionButtons.forEach { $0.isHidden = true }
+        if panelHost == nil {
+            let host = UIHostingController(rootView: v)
+            host.view.backgroundColor = .clear
+            addChild(host)
+            root.addSubview(host.view)
+            host.didMove(toParent: self)
+            panelHost = host
+        } else {
+            panelHost?.rootView = v
+        }
+        panelHost?.view.isHidden = false
+        panelHost?.view.frame = keyboardArea.frame
+        if let hv = panelHost?.view { root.bringSubviewToFront(hv) }
+    }
+
+    private var favoritesOnly = false
+    var trackpadEnabled: Bool { config.trackpad }
+
+    private func clipboardPanel() -> ClipboardPanel {
+        ClipboardPanel(hasFullAccess: hasFullAccess,
+                       snapshots: loadSnapshots(),
+                       favoritesOnly: favoritesOnly,
+                       onFilter: { [weak self] fav in
+                           self?.favoritesOnly = fav
+                           self?.refreshMode()
+                       },
+                       onPick: { [weak self] snap in
+                           guard let self else { return }
+                           self.keyFeedback()
+                           if let text = snap.insertable {
+                               self.textDocumentProxy.insertText(text)
+                               self.mode = .keys
+                               self.refreshMode()
+                           } else if let data = snap.imageData, let img = UIImage(data: data) {
+                               UIPasteboard.general.image = img
+                           }
+                       })
+    }
+
+    private func loadSnapshots() -> [ClipSnapshot] {
+        guard hasFullAccess else { return [] }
+        let context = ModelContext(ClipStore.makeContainer())
+        CaptureService.captureIfNeeded(context: context)
+        var d = FetchDescriptor<ClipItem>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
+        d.fetchLimit = 40
+        let items = (try? context.fetch(d)) ?? []
+        return items.filter { favoritesOnly ? $0.isFavorite : true }.map { item in
+            ClipSnapshot(id: item.id, typeLabel: item.type.label, systemImage: item.type.systemImage,
+                         preview: item.displayTitle, insertable: insertableText(for: item),
+                         imageData: item.type == .image ? item.assetData : nil,
+                         isSensitive: item.isSensitive, isFavorite: item.isFavorite)
+        }
+    }
+
+    private func insertableText(for item: ClipItem) -> String? {
+        switch item.type {
+        case .link:  return item.urlString ?? item.plainText
+        case .image, .file: return nil
+        default:     return item.plainText
+        }
     }
 }
 
-// MARK: - Snapshot ligero del historial
+// MARK: - Fila de teclas (UIKit)
+
+final class KeyRowView: UIView {
+    private var keys: [KeyView] = []
+    private let specs: [KeySpec]
+
+    init(specs: [KeySpec], controller: KeyboardViewController) {
+        self.specs = specs
+        super.init(frame: .zero)
+        for spec in specs {
+            let k = KeyView(spec: spec, controller: controller)
+            addSubview(k)
+            keys.append(k)
+        }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func applyShift(_ upper: Bool) {
+        for k in keys { k.applyShift(upper) }
+    }
+
+    func layoutKeys(sidePadding: CGFloat, spacing: CGFloat, fontSize: CGFloat) {
+        let totalFactor = specs.reduce(0) { $0 + $1.widthFactor }
+        let n = CGFloat(specs.count)
+        let unit = (bounds.width - 2 * sidePadding - spacing * (n - 1)) / totalFactor
+        var x = sidePadding
+        for k in keys {
+            let w = k.spec.widthFactor * unit
+            k.frame = CGRect(x: x, y: 0, width: w, height: bounds.height)
+            k.setFontSize(fontSize)
+            x += w + spacing
+        }
+    }
+}
+
+// MARK: - Tecla individual (UIKit, respuesta inmediata al tocar)
+
+final class KeyView: UIView {
+    let spec: KeySpec
+    private weak var controller: KeyboardViewController?
+    private let label = UILabel()
+
+    private var baseValue: String
+    private var upper = false
+    private var longTimer: Timer?
+    private var accentBar: UIView?
+    private var accentLabels: [UILabel] = []
+    private var selectedAccent = 0
+    private var isDown = false
+    private var spaceTracking = false
+    private var spaceStartX: CGFloat = 0
+    private var spaceConsumed = 0
+
+    init(spec: KeySpec, controller: KeyboardViewController) {
+        self.spec = spec
+        self.controller = controller
+        self.baseValue = spec.value
+        super.init(frame: .zero)
+
+        backgroundColor = Self.color(for: spec.kind, pressed: false)
+        layer.cornerRadius = 7
+        clipsToBounds = false
+
+        label.textAlignment = .center
+        label.textColor = .label
+        label.adjustsFontSizeToFitWidth = true
+        label.minimumScaleFactor = 0.7
+        addSubview(label)
+
+        switch spec.kind {
+        case .shift:     label.text = "⇧"
+        case .backspace: label.text = "⌫"
+        case .globe:     label.text = "🌐"
+        case .ret:       label.text = "↵"
+        case .space:     label.text = "espacio"; label.textColor = .secondaryLabel; label.font = .systemFont(ofSize: 15)
+        case .mode:      label.text = spec.value; label.font = .systemFont(ofSize: 15)
+        default:         label.text = spec.value
+        }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        label.frame = bounds
+    }
+
+    func setFontSize(_ size: CGFloat) {
+        if spec.kind == .char { label.font = .systemFont(ofSize: size) }
+    }
+
+    func applyShift(_ up: Bool) {
+        upper = up
+        if spec.kind == .char, baseValue.rangeOfCharacter(from: .letters) != nil {
+            label.text = up ? baseValue.uppercased() : baseValue
+        }
+    }
+
+    private func setPressed(_ p: Bool) {
+        backgroundColor = Self.color(for: spec.kind, pressed: p)
+    }
+
+    static func color(for kind: KeyKind, pressed: Bool) -> UIColor {
+        switch kind {
+        case .char, .space:
+            return pressed ? .systemGray2 : .secondarySystemBackground
+        default:
+            return pressed ? .systemGray2 : .systemGray4
+        }
+    }
+
+    // MARK: Touches
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard !isDown else { return }
+        isDown = true
+        setPressed(true)
+        switch spec.kind {
+        case .char:
+            controller?.insertChar(baseValue)
+            controller?.showPopup(for: self, text: upper ? baseValue.uppercased() : baseValue)
+            if !spec.variants.isEmpty {
+                longTimer?.invalidate()
+                longTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
+                    self?.showAccents()
+                }
+            }
+        case .shift:     controller?.handleShift()
+        case .backspace: controller?.backspaceDown()
+        case .mode:      controller?.toggleSymbols()
+        case .globe:     controller?.switchKeyboard()
+        case .comma:     controller?.commaTap()
+        case .period:    controller?.periodTap()
+        case .ret:       controller?.returnTap()
+        case .space:
+            if let t = touches.first {
+                spaceStartX = t.location(in: superview).x
+                spaceTracking = false
+                spaceConsumed = 0
+            }
+        }
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let t = touches.first else { return }
+        if accentBar != nil {
+            let p = t.location(in: self)
+            let slot = Int((p.x + 20) / 34)
+            selectedAccent = min(max(slot, 0), spec.variants.count - 1)
+            highlightAccent()
+            return
+        }
+        if spec.kind == .space, let controller, controller.trackpadEnabled {
+            let x = t.location(in: superview).x
+            let dx = x - spaceStartX
+            if !spaceTracking && abs(dx) > 16 { spaceTracking = true }
+            if spaceTracking {
+                let steps = Int(dx / 9)
+                let delta = steps - spaceConsumed
+                if delta != 0 {
+                    controller.moveCursor(delta)
+                    spaceConsumed = steps
+                }
+            }
+        }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        finishTouch(cancelled: false)
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        finishTouch(cancelled: true)
+    }
+
+    private func finishTouch(cancelled: Bool) {
+        isDown = false
+        setPressed(false)
+        longTimer?.invalidate(); longTimer = nil
+        controller?.hidePopup()
+
+        if accentBar != nil {
+            if !cancelled, spec.variants.indices.contains(selectedAccent) {
+                let v = spec.variants[selectedAccent]
+                controller?.replaceLastWithVariant(upper ? v.uppercased() : v)
+            }
+            accentBar?.removeFromSuperview()
+            accentBar = nil
+            accentLabels = []
+            return
+        }
+
+        if spec.kind == .backspace { controller?.backspaceUp() }
+        if spec.kind == .space {
+            if !cancelled && !spaceTracking { controller?.spaceTap() }
+            spaceTracking = false
+        }
+    }
+
+    // MARK: Barra de acentos (pulsación larga)
+
+    private func showAccents() {
+        guard let root = controller?.view, !spec.variants.isEmpty else { return }
+        controller?.hidePopup()
+        let variants = spec.variants
+        let cellW: CGFloat = 34, hgt: CGFloat = 44
+        let w = CGFloat(variants.count) * cellW + 8
+        let kf = convert(bounds, to: root)
+        var x = kf.midX - w / 2
+        x = min(max(x, 3), root.bounds.width - w - 3)
+        let bar = UIView(frame: CGRect(x: x, y: max(kf.minY - hgt - 6, 2), width: w, height: hgt))
+        bar.backgroundColor = .systemGray4
+        bar.layer.cornerRadius = 10
+        root.addSubview(bar)
+        accentLabels = []
+        for (i, v) in variants.enumerated() {
+            let l = UILabel(frame: CGRect(x: 4 + CGFloat(i) * cellW, y: 4, width: cellW, height: hgt - 8))
+            l.text = upper ? v.uppercased() : v
+            l.textAlignment = .center
+            l.font = .systemFont(ofSize: 22)
+            l.layer.cornerRadius = 6
+            l.clipsToBounds = true
+            bar.addSubview(l)
+            accentLabels.append(l)
+        }
+        accentBar = bar
+        selectedAccent = 0
+        highlightAccent()
+    }
+
+    private func highlightAccent() {
+        for (i, l) in accentLabels.enumerated() {
+            l.backgroundColor = i == selectedAccent ? .tintColor : .clear
+            l.textColor = i == selectedAccent ? .white : .label
+        }
+    }
+}
+
+// MARK: - Snapshot del historial para el panel
 
 struct ClipSnapshot: Identifiable {
     let id: UUID
@@ -88,872 +912,90 @@ struct ClipSnapshot: Identifiable {
     let isFavorite: Bool
 }
 
-// MARK: - Vista raíz
+// MARK: - Panel del portapapeles (SwiftUI, sólo al abrirlo)
 
-struct KeyboardRootView: View {
-    let bridge: KeyboardBridge
-
-    enum ShiftState { case off, on, caps }
-    enum Panel { case keys, clipboard, emoji }
-
-    @State private var config = KbPrefs.Config.load()
-    @State private var shift: ShiftState = .on
-    @State private var symbolsMode = false
-    @State private var panel: Panel = .keys
-    @State private var favoritesOnly = false
-    @State private var snapshots: [ClipSnapshot] = []
-    @State private var suggestions: [String] = []
-    @State private var revertWord: String?          // palabra original tras autocorrección
-    @State private var lastCommittedWord = ""
-    @State private var hint: String?
-    @State private var lastSpaceTap: Date = .distantPast
-    @State private var lastShiftTap: Date = .distantPast
-    @State private var shiftPressed = false
-    @State private var suggestionGeneration = 0
-    @State private var deleteTimer: Timer?
-
-    private let keyColor = Color(.secondarySystemBackground)
-    private let keyPressColor = Color(.systemGray2)
+struct ClipboardPanel: View {
+    let hasFullAccess: Bool
+    let snapshots: [ClipSnapshot]
+    let favoritesOnly: Bool
+    let onFilter: (Bool) -> Void
+    let onPick: (ClipSnapshot) -> Void
 
     var body: some View {
-        VStack(spacing: 6) {
-            toolbar
-            switch panel {
-            case .keys:      keysArea
-            case .clipboard: clipboardPanel
-            case .emoji:     EmojiPanel(insert: { emoji in
-                                            bridge.insert(emoji)
-                                            EmojiStore.registerRecent(emoji)
-                                        },
-                                        backToKeys: { panel = .keys },
-                                        deleteBackward: { bridge.deleteBackward() })
-            }
-        }
-        .padding(.horizontal, 3)
-        .padding(.top, 4)
-        .padding(.bottom, 2)
-        .task {
-            config = KbPrefs.Config.load()
-            bridge.config = config
-            captureAndLoad()
-            updateShiftFromContext()
-            // Precalienta el corrector: la primera sugerencia no congela la UI.
-            DispatchQueue.main.async {
-                let checker = UITextChecker()
-                _ = checker.completions(forPartialWordRange: NSRange(location: 0, length: 2),
-                                        in: "ho", language: "es_ES")
-                _ = checker.completions(forPartialWordRange: NSRange(location: 0, length: 2),
-                                        in: "he", language: "en_US")
-            }
-        }
-        .overlay {
-            if let hint {
-                Text(hint)
-                    .font(.caption.weight(.medium))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.regularMaterial, in: Capsule())
-            }
-        }
-    }
-
-    // MARK: Barra superior
-
-    private var toolbar: some View {
-        HStack(spacing: 6) {
-            TouchDownButton(action: {
-                bridge.keyFeedback()
-                if panel == .clipboard { panel = .keys }
-                else { panel = .clipboard; captureAndLoad() }
-            }) {
-                Image(systemName: panel == .clipboard ? "keyboard" : "doc.on.clipboard")
-                    .font(.body.weight(.medium))
-                    .frame(width: 44, height: 34)
-                    .background(panel == .clipboard ? Color.accentColor.opacity(0.25) : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 8))
-                    .foregroundStyle(panel == .clipboard ? Color.accentColor : Color.primary)
-            }
-
-            suggestionBar
-
-            TouchDownButton(action: {
-                bridge.keyFeedback()
-                panel = panel == .emoji ? .keys : .emoji
-            }) {
-                Image(systemName: panel == .emoji ? "keyboard" : "face.smiling")
-                    .font(.body.weight(.medium))
-                    .frame(width: 44, height: 34)
-                    .background(panel == .emoji ? Color.accentColor.opacity(0.25) : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 8))
-                    .foregroundStyle(panel == .emoji ? Color.accentColor : Color.primary)
-            }
-        }
-        .frame(height: 36)
-    }
-
-    @ViewBuilder private var suggestionBar: some View {
-        if !config.prediction || (suggestions.isEmpty && revertWord == nil) {
-            Spacer()
-        } else {
-            HStack(spacing: 0) {
-                if let revertWord {
-                    Button {
-                        undoCorrection(to: revertWord)
-                    } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: "arrow.uturn.backward").font(.caption2)
-                            Text(revertWord).font(.subheadline)
-                        }
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 34)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
+        Group {
+            if !hasFullAccess {
+                VStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.lock").font(.title2).foregroundStyle(.secondary)
+                    Text("Activa «Permitir acceso completo» en Ajustes → ClipDeck → Teclados.")
+                        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
-                ForEach(Array(suggestions.prefix(revertWord == nil ? 3 : 2).enumerated()),
-                        id: \.offset) { index, word in
-                    if index > 0 || revertWord != nil {
-                        Divider().frame(height: 18)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                VStack(spacing: 6) {
+                    HStack(spacing: 8) {
+                        chip("Recientes", "clock.arrow.circlepath", active: !favoritesOnly) { onFilter(false) }
+                        chip("Favoritos", "star.fill", active: favoritesOnly) { onFilter(true) }
+                        Spacer()
                     }
-                    Button {
-                        applySuggestion(word)
-                    } label: {
-                        Text(word)
-                            .font(.subheadline)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 34)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .frame(maxWidth: .infinity)
-        }
-    }
+                    .padding(.horizontal, 6)
+                    .padding(.top, 6)
 
-    // MARK: Distribuciones
-
-    private var numberRow: [String] { ["1","2","3","4","5","6","7","8","9","0"] }
-    private var letterRows: [[String]] {
-        [["q","w","e","r","t","y","u","i","o","p"],
-         ["a","s","d","f","g","h","j","k","l","ñ"]]
-    }
-    private var thirdRowLetters: [String] { ["z","x","c","v","b","n","m"] }
-    private var symbolRows: [[String]] {
-        [["@","#","$","_","&","-","+","(",")","/"],
-         ["*","\"","'",":",";","!","?","¿","¡","%"]]
-    }
-    private var thirdRowSymbols: [String] { ["=","<",">","{","}","[","]"] }
-
-    private var keysArea: some View {
-        GeometryReader { geo in
-            let rowCount: CGFloat = config.numberRow ? 5 : 4
-            let spacing: CGFloat = 6
-            let rowH = min(max((geo.size.height - spacing * (rowCount - 1) - 4) / rowCount, 36), 64)
-
-            VStack(spacing: spacing) {
-                if config.numberRow {
-                    HStack(spacing: 4) {
-                        ForEach(numberRow, id: \.self) { charKey($0, height: rowH) }
-                    }
-                }
-
-                ForEach(0..<2, id: \.self) { index in
-                    HStack(spacing: 4) {
-                        ForEach((symbolsMode ? symbolRows : letterRows)[index], id: \.self) { key in
-                            charKey(key, height: rowH)
-                        }
-                    }
-                }
-
-                HStack(spacing: 4) {
-                    if symbolsMode {
-                        ForEach(thirdRowSymbols, id: \.self) { charKey($0, height: rowH) }
+                    if snapshots.isEmpty {
+                        Text("Historial vacío. Copia algo y vuelve a abrir este panel.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
-                        shiftKey(height: rowH)
-                        ForEach(thirdRowLetters, id: \.self) { charKey($0, height: rowH) }
-                    }
-                    backspaceKey(height: rowH)
-                }
-
-                HStack(spacing: 4) {
-                    utilKey(width: 46, height: rowH) { symbolsMode.toggle() } label: {
-                        Text(symbolsMode ? "ABC" : "123").font(.subheadline)
-                    }
-                    if bridge.needsSwitchKey {
-                        utilKey(width: 40, height: rowH) { bridge.nextKeyboard() } label: {
-                            Image(systemName: "globe").font(.body)
-                        }
-                    }
-                    utilKey(width: 36, height: rowH) { commitSeparator(",") } label: {
-                        Text(",").font(.system(size: 20))
-                    }
-                    SpaceKeyView(height: rowH,
-                                 trackpadEnabled: config.trackpad,
-                                 normal: keyColor, pressed: keyPressColor,
-                                 feedback: { bridge.keyFeedback() },
-                                 moveCursor: { bridge.adjustCursor($0) },
-                                 onSpace: { handleSpace() })
-                    utilKey(width: 36, height: rowH) { commitSeparator(".") } label: {
-                        Text(".").font(.system(size: 20))
-                    }
-                    utilKey(width: 56, height: rowH) { commitSeparator("\n") } label: {
-                        Image(systemName: "return").font(.body)
-                    }
-                }
-            }
-        }
-    }
-
-    private func utilKey<L: View>(width: CGFloat, height: CGFloat,
-                                  action: @escaping () -> Void,
-                                  @ViewBuilder label: () -> L) -> some View {
-        PressableKey(width: width, height: height,
-                     normal: keyColor, pressed: keyPressColor,
-                     onPress: { bridge.keyFeedback(); action() },
-                     content: label())
-    }
-
-    private func charKey(_ key: String, height: CGFloat) -> some View {
-        let shifted = shift != .off && !symbolsMode
-        let display = shifted ? key.uppercased() : key
-        let variants = config.accents ? (KbData.keyVariants[key] ?? []) : []
-        let shiftedVariants = shifted ? variants.map { $0.uppercased() } : variants
-
-        return CharKeyView(display: display,
-                           variants: shiftedVariants,
-                           height: height,
-                           fontSize: CGFloat(config.fontSize),
-                           popupEnabled: config.keyPopup,
-                           normal: keyColor,
-                           pressed: keyPressColor,
-                           onTouchDown: {
-                               bridge.keyFeedback()
-                               bridge.insert(display)
-                               if shift == .on && !symbolsMode { shift = .off }
-                               refreshSuggestions()
-                           },
-                           onReplaceWithVariant: { variant in
-                               bridge.deleteBackward()
-                               bridge.insert(variant)
-                               refreshSuggestions()
-                           })
-    }
-
-    private func shiftKey(height: CGFloat) -> some View {
-        let icon = shift == .caps ? "capslock.fill" : (shift == .on ? "shift.fill" : "shift")
-        return Image(systemName: icon)
-            .font(.body)
-            .frame(width: 40, height: height)
-            .background(shift != .off ? Color(.systemGray3) : keyColor,
-                        in: RoundedRectangle(cornerRadius: 7))
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        guard !shiftPressed else { return }
-                        shiftPressed = true
-                        bridge.keyFeedback()
-                        let now = Date()
-                        if now.timeIntervalSince(lastShiftTap) < 0.3 {
-                            shift = .caps
-                        } else {
-                            shift = shift == .off ? .on : .off
-                        }
-                        lastShiftTap = now
-                    }
-                    .onEnded { _ in shiftPressed = false }
-            )
-    }
-
-    private func backspaceKey(height: CGFloat) -> some View {
-        PressableKey(width: 40, height: height,
-                     normal: keyColor, pressed: keyPressColor,
-                     onPress: {
-                         bridge.keyFeedback()
-                         bridge.deleteBackward()
-                         refreshSuggestions()
-                         deleteTimer?.invalidate()
-                         deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: false) { _ in
-                             deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.07, repeats: true) { _ in
-                                 DispatchQueue.main.async { bridge.deleteBackward() }
-                             }
-                         }
-                     },
-                     onRelease: {
-                         deleteTimer?.invalidate()
-                         deleteTimer = nil
-                         refreshSuggestions()
-                     },
-                     content: Image(systemName: "delete.left").font(.body))
-    }
-
-    // MARK: Escritura
-
-    private func handleSpace() {
-        let now = Date()
-        let before = bridge.contextBefore()
-        if config.doubleSpace,
-           now.timeIntervalSince(lastSpaceTap) < 0.4,
-           before.hasSuffix(" "),
-           before.dropLast().last?.isLetter == true {
-            bridge.deleteBackward()
-            bridge.insert(". ")
-            if config.autoCapital { shift = .on }
-        } else {
-            commitSeparator(" ")
-        }
-        lastSpaceTap = now
-    }
-
-    /// Cierra la palabra actual: autocorrección, aprendizaje y separador.
-    private func commitSeparator(_ separator: String) {
-        bridge.keyFeedback()
-        let word = currentWord()
-        revertWord = nil
-
-        if !word.isEmpty {
-            var finalWord = word
-            if config.autocorrect, let fix = autocorrection(for: word) {
-                replaceCurrentWord(with: fix)
-                revertWord = word
-                finalWord = fix
-            }
-            if config.learnWords {
-                WordLearner.learn(finalWord)
-                if !lastCommittedWord.isEmpty {
-                    WordLearner.learnBigram(previous: lastCommittedWord, next: finalWord)
-                }
-            }
-            lastCommittedWord = finalWord
-        }
-
-        bridge.insert(separator)
-        if separator == "." || separator == "\n" {
-            if config.autoCapital { shift = .on }
-            lastCommittedWord = ""
-        } else {
-            updateShiftFromContext()
-        }
-        refreshSuggestions()
-    }
-
-    private func updateShiftFromContext() {
-        guard config.autoCapital, shift != .caps else { return }
-        let before = bridge.contextBefore().trimmingCharacters(in: .whitespaces)
-        if before.isEmpty || before.hasSuffix(".") || before.hasSuffix("!") || before.hasSuffix("?") {
-            shift = .on
-        }
-    }
-
-    // MARK: Autocorrección
-
-    private func autocorrection(for word: String) -> String? {
-        guard word.count >= 3, word.count <= 20,
-              word.rangeOfCharacter(from: .decimalDigits) == nil,
-              word != word.uppercased(),
-              !WordLearner.isKnown(word) else { return nil }
-
-        let checker = UITextChecker()
-        let range = NSRange(location: 0, length: word.utf16.count)
-
-        // Si es correcta en español o inglés, no tocar.
-        for language in ["es_ES", "en_US"] {
-            let misspelled = checker.rangeOfMisspelledWord(in: word, range: range,
-                                                           startingAt: 0, wrap: false,
-                                                           language: language)
-            if misspelled.location == NSNotFound { return nil }
-        }
-
-        // Buscar una corrección razonable (español primero).
-        for language in ["es_ES", "en_US"] {
-            if let guesses = checker.guesses(forWordRange: range, in: word, language: language) {
-                for guess in guesses.prefix(3) {
-                    let sameish = abs(guess.count - word.count) <= 2 && !guess.contains(" ")
-                    if sameish && guess.lowercased() != word.lowercased() {
-                        // Respeta la mayúscula inicial del usuario
-                        if word.first?.isUppercase == true {
-                            return guess.prefix(1).uppercased() + guess.dropFirst()
-                        }
-                        return guess
-                    }
-                }
-            }
-        }
-        return nil
-    }
-
-    private func undoCorrection(to original: String) {
-        // Borra "palabraCorregida<separador>" y restaura la original.
-        let before = bridge.contextBefore()
-        guard let lastChar = before.last else { return }
-        let separator = String(lastChar)
-        let corrected = wordBefore(String(before.dropLast()))
-        for _ in 0..<(corrected.count + 1) { bridge.deleteBackward() }
-        bridge.insert(original + separator)
-        WordLearner.learn(original)   // no volver a corregirla
-        revertWord = nil
-        refreshSuggestions()
-    }
-
-    // MARK: Sugerencias
-
-    private func currentWord() -> String {
-        wordBefore(bridge.contextBefore())
-    }
-
-    private func wordBefore(_ text: String) -> String {
-        let separators = CharacterSet.whitespacesAndNewlines
-            .union(CharacterSet(charactersIn: ".,;:!?¿¡\"'()[]{}"))
-        if let lastRange = text.rangeOfCharacter(from: separators, options: .backwards) {
-            return String(text[lastRange.upperBound...])
-        }
-        return text
-    }
-
-    private func refreshSuggestions() {
-        guard config.prediction else { return }
-        suggestionGeneration += 1
-        let generation = suggestionGeneration
-        // Se calcula tras despachar el toque para no retrasar la siguiente pulsación.
-        DispatchQueue.main.async {
-            guard generation == suggestionGeneration else { return }
-            computeSuggestions()
-        }
-    }
-
-    private func computeSuggestions() {
-        let word = currentWord()
-
-        if word.isEmpty {
-            suggestions = nextWordSuggestions()
-            return
-        }
-        revertWord = nil
-        guard word.count >= 2, word.rangeOfCharacter(from: .letters) != nil else {
-            suggestions = []
-            return
-        }
-
-        let lower = word.lowercased()
-        let capitalize = word.first?.isUppercase == true
-        var results: [String] = []
-
-        results += WordLearner.matches(prefix: lower, limit: 2)
-
-        for entry in bridge.lexiconWords where entry.lowercased().hasPrefix(lower) {
-            results.append(entry)
-            if results.count >= 4 { break }
-        }
-
-        let checker = UITextChecker()
-        let range = NSRange(location: 0, length: word.utf16.count)
-        for language in ["es_ES", "en_US"] {
-            if let completions = checker.completions(forPartialWordRange: range,
-                                                     in: word, language: language) {
-                results.append(contentsOf: completions)
-            }
-            if results.count >= 12 { break }
-        }
-
-        var seen = Set<String>()
-        var unique: [String] = []
-        for candidate in results {
-            let key = candidate.lowercased()
-            guard key != lower, !seen.contains(key) else { continue }
-            seen.insert(key)
-            unique.append(capitalize ? candidate.prefix(1).uppercased() + candidate.dropFirst()
-                                     : candidate)
-            if unique.count == 3 { break }
-        }
-        suggestions = unique
-    }
-
-    /// Predicción de palabra siguiente: bigramas aprendidos + frecuentes.
-    private func nextWordSuggestions() -> [String] {
-        var results: [String] = []
-        if !lastCommittedWord.isEmpty {
-            results += WordLearner.successors(of: lastCommittedWord)
-        }
-        for word in KbData.commonWords {
-            if results.count >= 3 { break }
-            if !results.contains(word) { results.append(word) }
-        }
-        let capitalize = shift != .off
-        return Array(results.prefix(3)).map {
-            capitalize ? $0.prefix(1).uppercased() + $0.dropFirst() : $0
-        }
-    }
-
-    private func applySuggestion(_ word: String) {
-        bridge.keyFeedback()
-        let current = currentWord()
-        for _ in 0..<current.count { bridge.deleteBackward() }
-        bridge.insert(word + " ")
-        if config.learnWords {
-            WordLearner.learn(word)
-            if !lastCommittedWord.isEmpty && !current.isEmpty {
-                WordLearner.learnBigram(previous: lastCommittedWord, next: word)
-            }
-        }
-        lastCommittedWord = word
-        revertWord = nil
-        updateShiftFromContext()
-        suggestions = nextWordSuggestions()
-    }
-
-    private func replaceCurrentWord(with replacement: String) {
-        let current = currentWord()
-        for _ in 0..<current.count { bridge.deleteBackward() }
-        bridge.insert(replacement)
-    }
-
-    // MARK: Panel del portapapeles
-
-    @ViewBuilder private var clipboardPanel: some View {
-        if !bridge.hasFullAccess {
-            VStack(spacing: 8) {
-                Image(systemName: "exclamationmark.lock").font(.title2).foregroundStyle(.secondary)
-                Text("Activa «Permitir acceso completo» en Ajustes → ClipDeck → Teclados.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            .frame(maxHeight: .infinity)
-        } else {
-            VStack(spacing: 6) {
-                HStack(spacing: 8) {
-                    filterChip("Recientes", icon: "clock.arrow.circlepath", active: !favoritesOnly) {
-                        favoritesOnly = false; loadItems()
-                    }
-                    filterChip("Favoritos", icon: "star.fill", active: favoritesOnly) {
-                        favoritesOnly = true; loadItems()
-                    }
-                    Spacer()
-                }
-                if snapshots.isEmpty {
-                    Text("Historial vacío. Copia algo en cualquier app y vuelve a abrir este panel.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxHeight: .infinity)
-                } else {
-                    ScrollView {
-                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible())],
-                                  spacing: 6) {
-                            ForEach(snapshots) { snap in
-                                Button { handleClipTap(snap) } label: { clipCard(snap) }
-                                    .buttonStyle(.plain)
+                        ScrollView {
+                            LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible())],
+                                      spacing: 6) {
+                                ForEach(snapshots) { snap in
+                                    Button { onPick(snap) } label: { card(snap) }.buttonStyle(.plain)
+                                }
                             }
+                            .padding([.horizontal, .bottom], 6)
                         }
-                        .padding(.bottom, 6)
                     }
                 }
             }
         }
     }
 
-    private func filterChip(_ text: String, icon: String, active: Bool,
-                            action: @escaping () -> Void) -> some View {
+    private func chip(_ text: String, _ icon: String, active: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: icon).font(.caption2)
                 Text(text).font(.caption)
             }
-            .padding(.horizontal, 10)
-            .frame(height: 28)
-            .background(active ? Color.accentColor.opacity(0.22) : Color(.secondarySystemBackground),
-                        in: Capsule())
+            .padding(.horizontal, 10).frame(height: 28)
+            .background(active ? Color.accentColor.opacity(0.22) : Color(.secondarySystemBackground), in: Capsule())
             .foregroundStyle(active ? Color.accentColor : Color.primary)
         }
         .buttonStyle(.plain)
     }
 
-    private func clipCard(_ snap: ClipSnapshot) -> some View {
+    private func card(_ snap: ClipSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 3) {
                 Image(systemName: snap.systemImage).font(.caption2)
                 Text(snap.typeLabel).font(.caption2)
-                if snap.isFavorite {
-                    Image(systemName: "star.fill").font(.system(size: 8)).foregroundStyle(.yellow)
-                }
+                if snap.isFavorite { Image(systemName: "star.fill").font(.system(size: 8)).foregroundStyle(.yellow) }
             }
             .foregroundStyle(.secondary)
-
             if snap.isSensitive {
-                Label("Sensible", systemImage: "eye.slash")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Label("Sensible", systemImage: "eye.slash").font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else if let data = snap.imageData, let ui = UIImage(data: data) {
-                Image(uiImage: ui)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 54)
+                Image(uiImage: ui).resizable().scaledToFill()
+                    .frame(maxWidth: .infinity).frame(height: 54)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
             } else {
-                Text(snap.preview)
-                    .font(.caption)
-                    .lineLimit(3)
-                    .multilineTextAlignment(.leading)
+                Text(snap.preview).font(.caption).lineLimit(3).multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(8)
-        .frame(height: 92, alignment: .topLeading)
+        .padding(8).frame(height: 92, alignment: .topLeading)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    private func handleClipTap(_ snap: ClipSnapshot) {
-        bridge.keyFeedback()
-        if let text = snap.insertable {
-            bridge.insert(text)
-            panel = .keys
-        } else if let data = snap.imageData, let image = UIImage(data: data) {
-            UIPasteboard.general.image = image
-            showHint("Copiado: mantén pulsado el campo y elige Pegar")
-        } else {
-            showHint("Este elemento no se puede insertar como texto")
-        }
-    }
-
-    // MARK: Datos
-
-    private func captureAndLoad() {
-        guard bridge.hasFullAccess else { return }
-        let container = ClipStore.makeContainer()
-        let context = ModelContext(container)
-        CaptureService.captureIfNeeded(context: context)
-        loadItems(context: context)
-    }
-
-    private func loadItems(context: ModelContext? = nil) {
-        guard bridge.hasFullAccess else { return }
-        let ctx = context ?? ModelContext(ClipStore.makeContainer())
-        var descriptor = FetchDescriptor<ClipItem>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
-        descriptor.fetchLimit = 40
-        let items = (try? ctx.fetch(descriptor)) ?? []
-        snapshots = items
-            .filter { favoritesOnly ? $0.isFavorite : true }
-            .map { item in
-                ClipSnapshot(id: item.id,
-                             typeLabel: item.type.label,
-                             systemImage: item.type.systemImage,
-                             preview: item.displayTitle,
-                             insertable: insertableText(for: item),
-                             imageData: item.type == .image ? item.assetData : nil,
-                             isSensitive: item.isSensitive,
-                             isFavorite: item.isFavorite)
-            }
-    }
-
-    private func insertableText(for item: ClipItem) -> String? {
-        switch item.type {
-        case .link:  return item.urlString ?? item.plainText
-        case .image: return nil
-        case .file:  return nil
-        default:     return item.plainText
-        }
-    }
-
-    private func showHint(_ text: String) {
-        withAnimation { hint = text }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
-            withAnimation { if hint == text { hint = nil } }
-        }
-    }
-}
-
-// MARK: - Tecla básica: dispara al tocar, con resaltado
-
-struct PressableKey<Content: View>: View {
-    var width: CGFloat? = nil
-    var height: CGFloat = 41
-    var normal: Color
-    var pressed: Color
-    var onPress: () -> Void
-    var onRelease: (() -> Void)? = nil
-    let content: Content
-
-    @State private var isPressed = false
-
-    var body: some View {
-        content
-            .frame(maxWidth: width == nil ? .infinity : nil)
-            .frame(width: width, height: height)
-            .background(isPressed ? pressed : normal,
-                        in: RoundedRectangle(cornerRadius: 7))
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        if !isPressed {
-                            isPressed = true
-                            onPress()
-                        }
-                    }
-                    .onEnded { _ in
-                        isPressed = false
-                        onRelease?()
-                    }
-            )
-    }
-}
-
-// MARK: - Tecla de carácter: popup al pulsar y variantes con pulsación larga
-
-struct CharKeyView: View {
-    let display: String
-    let variants: [String]
-    let height: CGFloat
-    let fontSize: CGFloat
-    let popupEnabled: Bool
-    let normal: Color
-    let pressed: Color
-    let onTouchDown: () -> Void
-    let onReplaceWithVariant: (String) -> Void
-
-    @State private var isPressed = false
-    @State private var showVariants = false
-    @State private var selectedVariant = 0
-    @State private var longPressTimer: Timer?
-
-    var body: some View {
-        Text(display)
-            .font(.system(size: fontSize))
-            .frame(maxWidth: .infinity)
-            .frame(height: height)
-            .background(isPressed ? pressed : normal,
-                        in: RoundedRectangle(cornerRadius: 7))
-            .overlay(alignment: .top) {
-                if showVariants {
-                    variantsBar
-                        .offset(y: -(height + 16))
-                } else if isPressed && popupEnabled {
-                    keyPopup
-                        .offset(y: -(height + 14))
-                }
-            }
-            .zIndex(isPressed || showVariants ? 10 : 0)
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        if !isPressed {
-                            isPressed = true
-                            onTouchDown()
-                            if !variants.isEmpty {
-                                longPressTimer?.invalidate()
-                                longPressTimer = Timer.scheduledTimer(withTimeInterval: 0.4,
-                                                                      repeats: false) { _ in
-                                    DispatchQueue.main.async {
-                                        showVariants = true
-                                        selectedVariant = 0
-                                    }
-                                }
-                            }
-                        }
-                        if showVariants {
-                            let slot = Int((value.translation.width + 16) / 34)
-                            selectedVariant = min(max(slot, 0), variants.count - 1)
-                        }
-                    }
-                    .onEnded { _ in
-                        longPressTimer?.invalidate()
-                        longPressTimer = nil
-                        if showVariants {
-                            onReplaceWithVariant(variants[selectedVariant])
-                        }
-                        showVariants = false
-                        isPressed = false
-                    }
-            )
-    }
-
-    private var keyPopup: some View {
-        Text(display)
-            .font(.system(size: fontSize + 12, weight: .medium))
-            .frame(minWidth: 40)
-            .padding(.vertical, 8)
-            .padding(.horizontal, 6)
-            .background(Color(.systemGray4), in: RoundedRectangle(cornerRadius: 9))
-            .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
-            .allowsHitTesting(false)
-            .fixedSize()
-    }
-
-    private var variantsBar: some View {
-        HStack(spacing: 2) {
-            ForEach(Array(variants.enumerated()), id: \.offset) { index, variant in
-                Text(variant)
-                    .font(.system(size: fontSize + 2))
-                    .frame(width: 32, height: 40)
-                    .background(index == selectedVariant ? Color.accentColor : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 7))
-                    .foregroundStyle(index == selectedVariant ? Color.white : Color.primary)
-            }
-        }
-        .padding(4)
-        .background(Color(.systemGray4), in: RoundedRectangle(cornerRadius: 10))
-        .shadow(color: .black.opacity(0.25), radius: 5, y: 2)
-        .allowsHitTesting(false)
-        .fixedSize()
-    }
-}
-
-// MARK: - Barra espaciadora con trackpad (deslizar mueve el cursor)
-
-struct SpaceKeyView: View {
-    let height: CGFloat
-    let trackpadEnabled: Bool
-    let normal: Color
-    let pressed: Color
-    let feedback: () -> Void
-    let moveCursor: (Int) -> Void
-    let onSpace: () -> Void
-
-    @State private var isPressed = false
-    @State private var isTracking = false
-    @State private var consumedSteps = 0
-
-    var body: some View {
-        Text(isTracking ? "◂ cursor ▸" : "espacio")
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity)
-            .frame(height: height)
-            .background(isPressed ? pressed : normal,
-                        in: RoundedRectangle(cornerRadius: 7))
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        if !isPressed {
-                            isPressed = true
-                            isTracking = false
-                            consumedSteps = 0
-                            feedback()
-                        }
-                        guard trackpadEnabled else { return }
-                        let dx = value.translation.width
-                        if !isTracking && abs(dx) > 18 {
-                            isTracking = true
-                        }
-                        if isTracking {
-                            let steps = Int(dx / 9)
-                            let delta = steps - consumedSteps
-                            if delta != 0 {
-                                moveCursor(delta)
-                                consumedSteps = steps
-                            }
-                        }
-                    }
-                    .onEnded { _ in
-                        if !isTracking { onSpace() }
-                        isPressed = false
-                        isTracking = false
-                        consumedSteps = 0
-                    }
-            )
     }
 }
 
@@ -961,27 +1003,20 @@ struct SpaceKeyView: View {
 
 enum EmojiStore {
     static let recentsKey = "keyboard.recentEmojis"
-
-    static var recents: [String] {
-        UserDefaults.standard.stringArray(forKey: recentsKey) ?? []
+    static var recents: [String] { UserDefaults.standard.stringArray(forKey: recentsKey) ?? [] }
+    static func registerRecent(_ e: String) {
+        var l = recents; l.removeAll { $0 == e }; l.insert(e, at: 0)
+        UserDefaults.standard.set(Array(l.prefix(24)), forKey: recentsKey)
     }
-
-    static func registerRecent(_ emoji: String) {
-        var list = recents
-        list.removeAll { $0 == emoji }
-        list.insert(emoji, at: 0)
-        UserDefaults.standard.set(Array(list.prefix(24)), forKey: recentsKey)
-    }
-
     static let categories: [(icon: String, emojis: [String])] = [
-        ("😀", ["😀","😃","😄","😁","😆","😅","😂","🤣","🥲","😊","😇","🙂","😉","😌","😍","🥰","😘","😗","😋","😛","😜","🤪","🤨","🧐","🤓","😎","🥳","😏","😒","😞","😔","😟","😕","🙁","😣","😖","😫","😩","🥺","😢","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🤭","🤫","🤥","😶","😐","😑","😬","🙄","😯","😴","🤤","😪","😵","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","💀","👻","👽","🤖","💩","🤡"]),
-        ("👋", ["👋","🤚","✋","🖖","👌","🤌","🤏","✌️","🤞","🤟","🤘","🤙","👈","👉","👆","👇","☝️","👍","👎","✊","👊","🤛","🤜","👏","🙌","👐","🤲","🤝","🙏","💪","🦾","✍️","💅","🤳","🫶"]),
-        ("❤️", ["❤️","🧡","💛","💚","💙","💜","🖤","🤍","🤎","💔","❤️‍🔥","❤️‍🩹","💕","💞","💓","💗","💖","💘","💝","💟","♥️","💌","💋"]),
-        ("🐶", ["🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐨","🐯","🦁","🐮","🐷","🐸","🐵","🐔","🐧","🐦","🐤","🦆","🦅","🦉","🐺","🐗","🐴","🦄","🐝","🐛","🦋","🐌","🐞","🐜","🕷️","🐢","🐍","🦎","🐙","🦑","🦐","🦀","🐡","🐠","🐟","🐬","🐳","🐋","🦈","🐊"]),
-        ("🍕", ["🍏","🍎","🍐","🍊","🍋","🍌","🍉","🍇","🍓","🫐","🍈","🍒","🍑","🥭","🍍","🥥","🥝","🍅","🥑","🌽","🥕","🍔","🍟","🍕","🌭","🥪","🌮","🌯","🥗","🍝","🍜","🍲","🍣","🍱","🍤","🍙","🍚","🍘","🍥","🍦","🍰","🎂","🍮","🍭","🍬","🍫","🍿","🍩","🍪","☕","🍵","🧉","🥤","🍺","🍷","🥂"]),
-        ("⚽", ["⚽","🏀","🏈","⚾","🥎","🎾","🏐","🏉","🥏","🎱","🏓","🏸","🏒","🥅","⛳","🏹","🎣","🥊","🥋","🎽","🛹","🛼","⛸️","🎿","🏋️","🚴","🏊","🏄","🧗","🏆","🥇","🥈","🥉","🏅","🎖️","🎮","🕹️","🎲","♟️","🧩","🎯","🎳"]),
-        ("💡", ["📱","💻","⌨️","🖥️","🖨️","🖱️","💽","💾","💿","📀","📷","📸","📹","🎥","📞","☎️","📟","📠","📺","📻","🎙️","⏰","⌚","🔋","🔌","💡","🔦","🕯️","🗑️","💵","💴","💶","💷","💰","💳","💎","⚖️","🔧","🔨","⚒️","🛠️","⛏️","🔩","⚙️","🧱","⛓️","🧲","💣","🔪","🛡️","🔮","📿","🧿","💊","💉","🩹","🩺","🌡️","🧬","🦠","🧫","🧪","🔭","🔬"]),
-        ("🔣", ["✅","❌","❓","❗","‼️","⁉️","💯","🔞","📵","🚭","🚫","💤","♨️","💢","💬","🗨️","🗯️","💭","✳️","✴️","❇️","©️","®️","™️","#️⃣","*️⃣","0️⃣","1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟","🔢","▶️","⏸️","⏯️","⏹️","⏺️","⏭️","⏮️","⏩","⏪","🔀","🔁","🔂","◀️","🔼","🔽","➡️","⬅️","⬆️","⬇️","↗️","↘️","↙️","↖️","↕️","↔️","🔄","🔃","🎵","🎶","➕","➖","➗","✖️","🟰","💲","💱"])
+        ("😀", ["😀","😃","😄","😁","😆","😅","😂","🤣","🥲","😊","😇","🙂","😉","😌","😍","🥰","😘","😗","😋","😜","🤪","🤨","🧐","🤓","😎","🥳","😏","😒","😔","😟","🙁","😣","😫","😩","🥺","😢","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🤭","🤫","😶","😐","😑","😬","🙄","😴","🤤","😪","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","💀","👻","👽","🤖","💩","🤡"]),
+        ("👋", ["👋","🤚","✋","🖖","👌","🤌","🤏","✌️","🤞","🤟","🤘","🤙","👈","👉","👆","👇","☝️","👍","👎","✊","👊","🤛","🤜","👏","🙌","👐","🤲","🤝","🙏","💪","✍️","💅","🤳","🫶"]),
+        ("❤️", ["❤️","🧡","💛","💚","💙","💜","🖤","🤍","🤎","💔","❤️‍🔥","💕","💞","💓","💗","💖","💘","💝","💟","♥️","💌","💋"]),
+        ("🐶", ["🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐨","🐯","🦁","🐮","🐷","🐸","🐵","🐔","🐧","🐦","🐤","🦆","🦅","🦉","🐺","🐗","🐴","🦄","🐝","🐛","🦋","🐌","🐞","🐢","🐍","🐙","🦑","🦐","🦀","🐠","🐟","🐬","🐳","🦈","🐊"]),
+        ("🍕", ["🍏","🍎","🍐","🍊","🍋","🍌","🍉","🍇","🍓","🍈","🍒","🍑","🥭","🍍","🥥","🥝","🍅","🥑","🌽","🥕","🍔","🍟","🍕","🌭","🥪","🌮","🌯","🥗","🍝","🍜","🍲","🍣","🍱","🍤","🍚","🍦","🍰","🎂","🍮","🍭","🍬","🍫","🍿","🍩","🍪","☕","🍵","🥤","🍺","🍷","🥂"]),
+        ("⚽", ["⚽","🏀","🏈","⚾","🥎","🎾","🏐","🏉","🥏","🎱","🏓","🏸","🏒","🥅","⛳","🏹","🎣","🥊","🥋","🛹","⛸️","🎿","🏋️","🚴","🏊","🏄","🧗","🏆","🥇","🥈","🥉","🏅","🎮","🕹️","🎲","♟️","🧩","🎯"]),
+        ("💡", ["📱","💻","⌨️","🖥️","🖨️","🖱️","💾","💿","📷","📸","📹","🎥","📞","☎️","📺","📻","🎙️","⏰","⌚","🔋","🔌","💡","🔦","🗑️","💵","💰","💳","💎","🔧","🔨","🛠️","🔩","⚙️","🧱","🧲","💣","🔪","🔮","💊","💉","🩹","🌡️","🧬","🦠","🧪","🔭","🔬"]),
+        ("🔣", ["✅","❌","❓","❗","‼️","💯","🔞","🚫","💤","💢","💬","🗨️","💭","©️","®️","™️","#️⃣","0️⃣","1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","▶️","⏸️","⏹️","⏭️","⏩","🔀","🔁","◀️","🔼","🔽","➡️","⬅️","⬆️","⬇️","🔄","🎵","🎶","➕","➖","➗","✖️","💲"])
     ]
 }
 
@@ -989,13 +1024,12 @@ struct EmojiPanel: View {
     let insert: (String) -> Void
     let backToKeys: () -> Void
     let deleteBackward: () -> Void
-
     @State private var categoryIndex = -1
 
-    private var currentEmojis: [String] {
+    private var current: [String] {
         if categoryIndex == -1 {
-            let recents = EmojiStore.recents
-            return recents.isEmpty ? EmojiStore.categories[0].emojis : recents
+            let r = EmojiStore.recents
+            return r.isEmpty ? EmojiStore.categories[0].emojis : r
         }
         return EmojiStore.categories[categoryIndex].emojis
     }
@@ -1004,83 +1038,41 @@ struct EmojiPanel: View {
         VStack(spacing: 4) {
             ScrollView {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 8), spacing: 2) {
-                    ForEach(currentEmojis, id: \.self) { emoji in
-                        Button { insert(emoji) } label: {
-                            Text(emoji)
-                                .font(.system(size: 28))
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 38)
-                        }
-                        .buttonStyle(.plain)
+                    ForEach(current, id: \.self) { e in
+                        Button { insert(e) } label: {
+                            Text(e).font(.system(size: 28)).frame(maxWidth: .infinity).frame(height: 38)
+                        }.buttonStyle(.plain)
                     }
                 }
+                .padding(.top, 4)
             }
-
             HStack(spacing: 2) {
                 Button { backToKeys() } label: {
-                    Text("ABC")
-                        .font(.subheadline)
-                        .frame(width: 46, height: 34)
-                        .background(Color(.secondarySystemBackground),
-                                    in: RoundedRectangle(cornerRadius: 7))
-                }
-                .buttonStyle(.plain)
-
+                    Text("ABC").font(.subheadline).frame(width: 46, height: 34)
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 7))
+                }.buttonStyle(.plain)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 2) {
-                        categoryButton(icon: "🕐", index: -1)
-                        ForEach(Array(EmojiStore.categories.enumerated()), id: \.offset) { index, category in
-                            categoryButton(icon: category.icon, index: index)
+                        catButton("🕐", -1)
+                        ForEach(Array(EmojiStore.categories.enumerated()), id: \.offset) { i, c in
+                            catButton(c.icon, i)
                         }
                     }
                 }
-
                 Button { deleteBackward() } label: {
-                    Image(systemName: "delete.left")
-                        .font(.body)
-                        .frame(width: 40, height: 34)
-                        .background(Color(.secondarySystemBackground),
-                                    in: RoundedRectangle(cornerRadius: 7))
-                }
-                .buttonStyle(.plain)
+                    Image(systemName: "delete.left").font(.body).frame(width: 40, height: 34)
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 7))
+                }.buttonStyle(.plain)
             }
+            .padding(.horizontal, 3).padding(.bottom, 3)
         }
     }
 
-    private func categoryButton(icon: String, index: Int) -> some View {
+    private func catButton(_ icon: String, _ index: Int) -> some View {
         Button { categoryIndex = index } label: {
-            Text(icon)
-                .font(.system(size: 18))
-                .frame(width: 34, height: 34)
+            Text(icon).font(.system(size: 18)).frame(width: 34, height: 34)
                 .background(categoryIndex == index ? Color.accentColor.opacity(0.22) : Color.clear,
                             in: RoundedRectangle(cornerRadius: 7))
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-
-// MARK: - Botón que dispara al tocar (respuesta inmediata)
-
-struct TouchDownButton<Content: View>: View {
-    private let action: () -> Void
-    private let content: Content
-    @State private var down = false
-
-    init(action: @escaping () -> Void, @ViewBuilder content: () -> Content) {
-        self.action = action
-        self.content = content()
-    }
-
-    var body: some View {
-        content
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        if !down { down = true; action() }
-                    }
-                    .onEnded { _ in down = false }
-            )
+        }.buttonStyle(.plain)
     }
 }
