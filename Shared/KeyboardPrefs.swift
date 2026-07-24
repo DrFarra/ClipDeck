@@ -20,6 +20,7 @@ enum KbPrefs {
     static let spaceTrackpad   = "kb.spaceTrackpad"
     static let sound           = "kb.sound"
     static let haptics         = "kb.haptics"
+    static let hapticsLongPress = "kb.hapticsLongPress"
     static let punctLeft       = "kb.punctLeft"
     static let punctRight      = "kb.punctRight"
 
@@ -46,6 +47,7 @@ enum KbPrefs {
         var trackpad: Bool
         var sound: Bool
         var haptics: Bool
+        var hapticsLongPress: Bool
         var punctLeft: String
         var punctRight: String
 
@@ -64,6 +66,7 @@ enum KbPrefs {
                    trackpad: KbPrefs.bool(KbPrefs.spaceTrackpad, default: true),
                    sound: KbPrefs.bool(KbPrefs.sound, default: false),
                    haptics: KbPrefs.bool(KbPrefs.haptics, default: true),
+                   hapticsLongPress: KbPrefs.bool(KbPrefs.hapticsLongPress, default: true),
                    punctLeft: KbPrefs.store.string(forKey: KbPrefs.punctLeft) ?? ",",
                    punctRight: KbPrefs.store.string(forKey: KbPrefs.punctRight) ?? ".")
         }
