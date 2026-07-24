@@ -87,6 +87,7 @@ final class KeyboardViewController: UIInputViewController {
         setupTopBar()
 
         keyboardArea.clipsToBounds = false
+        keyboardArea.isMultipleTouchEnabled = true
         root.addSubview(keyboardArea)
 
         popup.textAlignment = .center
@@ -105,12 +106,18 @@ final class KeyboardViewController: UIInputViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         // Recarga preferencias por si cambiaron en la app.
-        config = KbPrefs.Config.load()
-        popup.font = .systemFont(ofSize: CGFloat(config.fontSize) + 12, weight: .medium)
-        if let h = view.constraints.first(where: { $0.firstAttribute == .height }) {
-            h.constant = CGFloat(config.height)
+        let newConfig = KbPrefs.Config.load()
+        let changed = newConfig != config
+        config = newConfig
+        if changed {
+            popup.font = .systemFont(ofSize: CGFloat(config.fontSize) + 12, weight: .medium)
+            if let h = view.constraints.first(where: { $0.firstAttribute == .height }) {
+                h.constant = CGFloat(config.height)
+            }
+            rebuildKeys()
+        } else {
+            updateKeyCaps()
         }
-        rebuildKeys()
         updateShiftFromContext()
         if mode == .keys { showKeyboard() }
     }
@@ -219,7 +226,7 @@ final class KeyboardViewController: UIInputViewController {
 
     private func updateKeyCaps() {
         let upper = shift != .off && !symbolsMode
-        for rowView in keyViews { rowView.applyShift(upper) }
+        for rowView in keyViews { rowView.applyShift(upper, caps: shift == .caps) }
     }
 
     // MARK: Layout manual (rellena toda la altura, sin márgenes)
@@ -318,8 +325,18 @@ final class KeyboardViewController: UIInputViewController {
 
     // MARK: Acciones de tecla
 
+    /// Timer que sí dispara mientras hay un dedo apoyado (modo .common).
+    static func commonTimer(_ interval: TimeInterval, _ block: @escaping () -> Void) -> Timer {
+        let t = Timer(timeInterval: interval, repeats: false) { _ in block() }
+        RunLoop.main.add(t, forMode: .common)
+        return t
+    }
+
     func keyFeedback() {
-        if config.haptics { haptic.impactOccurred() }
+        if config.haptics {
+            haptic.impactOccurred()
+            haptic.prepare()          // reduce la latencia del siguiente toque
+        }
         if config.sound { UIDevice.current.playInputClick() }
     }
 
@@ -363,16 +380,14 @@ final class KeyboardViewController: UIInputViewController {
         scheduleSuggestions()
         deleteRepeats = 0
         deleteTimer?.invalidate()
-        deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: false) { [weak self] _ in
-            self?.scheduleNextDelete()
-        }
+        deleteTimer = Self.commonTimer(0.45) { [weak self] in self?.scheduleNextDelete() }
     }
 
     /// Cada repetición borra más rápido; tras un rato pasa a borrar palabra a palabra.
     private func scheduleNextDelete() {
         deleteRepeats += 1
         let interval: TimeInterval = deleteRepeats < 8 ? 0.11 : (deleteRepeats < 18 ? 0.06 : 0.035)
-        deleteTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
+        deleteTimer = Self.commonTimer(interval) { [weak self] in
             guard let self else { return }
             if self.deleteRepeats > 26 { self.deleteWord() } else { self.textDocumentProxy.deleteBackward() }
             self.updateShiftFromContext()
@@ -857,6 +872,7 @@ final class KeyRowView: UIView {
     init(specs: [KeySpec], controller: KeyboardViewController) {
         self.specs = specs
         super.init(frame: .zero)
+        isMultipleTouchEnabled = true
         for spec in specs {
             let k = KeyView(spec: spec, controller: controller)
             addSubview(k)
@@ -865,8 +881,11 @@ final class KeyRowView: UIView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func applyShift(_ upper: Bool) {
-        for k in keys { k.applyShift(upper) }
+    func applyShift(_ upper: Bool, caps: Bool) {
+        for k in keys {
+            k.applyShift(upper)
+            k.setShiftActive(upper || caps, caps: caps)
+        }
     }
 
     func layoutKeys(sidePadding: CGFloat, spacing: CGFloat, fontSize: CGFloat) {
@@ -897,6 +916,8 @@ final class KeyView: UIView {
     private var accentLabels: [UILabel] = []
     private var selectedAccent = 0
     private var isDown = false
+    private var shiftActive = false
+    private var pressStart: CFTimeInterval = 0
     private var spaceTracking = false
     private var spaceStartX: CGFloat = 0
     private var spaceConsumed = 0
@@ -910,6 +931,8 @@ final class KeyView: UIView {
         backgroundColor = Self.color(for: spec.kind, pressed: false)
         layer.cornerRadius = 7
         clipsToBounds = false
+        isMultipleTouchEnabled = true
+        isExclusiveTouch = false
 
         label.textAlignment = .center
         label.textColor = .label
@@ -945,7 +968,20 @@ final class KeyView: UIView {
         }
     }
 
+    /// Resalta la tecla de mayúsculas según el estado actual.
+    func setShiftActive(_ active: Bool, caps: Bool) {
+        guard spec.kind == .shift else { return }
+        shiftActive = active
+        label.text = caps ? "⇪" : "⇧"
+        backgroundColor = active ? UIColor.systemGray : UIColor.systemGray4
+        label.textColor = active ? .white : .label
+    }
+
     private func setPressed(_ p: Bool) {
+        if spec.kind == .shift && !p {
+            backgroundColor = shiftActive ? UIColor.systemGray : UIColor.systemGray4
+            return
+        }
         backgroundColor = Self.color(for: spec.kind, pressed: p)
     }
 
@@ -963,6 +999,7 @@ final class KeyView: UIView {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard !isDown else { return }
         isDown = true
+        pressStart = CACurrentMediaTime()
         setPressed(true)
         switch spec.kind {
         case .char:
@@ -970,7 +1007,7 @@ final class KeyView: UIView {
             controller?.showPopup(for: self, text: upper ? baseValue.uppercased() : baseValue)
             if !spec.variants.isEmpty {
                 longTimer?.invalidate()
-                longTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
+                longTimer = KeyboardViewController.commonTimer(0.4) { [weak self] in
                     self?.showAccents()
                 }
             }
@@ -1022,9 +1059,22 @@ final class KeyView: UIView {
 
     private func finishTouch(cancelled: Bool) {
         isDown = false
-        setPressed(false)
         longTimer?.invalidate(); longTimer = nil
-        controller?.hidePopup()
+
+        // Si el toque fue muy corto, deja ver el resaltado un instante.
+        let elapsed = CACurrentMediaTime() - pressStart
+        let minVisible: CFTimeInterval = 0.06
+        if elapsed < minVisible && accentBar == nil {
+            let delay = minVisible - elapsed
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, !self.isDown else { return }
+                self.setPressed(false)
+                self.controller?.hidePopup()
+            }
+        } else {
+            setPressed(false)
+            controller?.hidePopup()
+        }
 
         if accentBar != nil {
             if !cancelled, spec.variants.indices.contains(selectedAccent) {
@@ -1248,7 +1298,7 @@ final class SuggestionButton: UIView {
         didLong = false
         backgroundColor = UIColor.systemGray4
         longTimer?.invalidate()
-        longTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
+        longTimer = KeyboardViewController.commonTimer(0.5) { [weak self] in
             guard let self, self.isDown else { return }
             self.didLong = true
             self.backgroundColor = .clear
