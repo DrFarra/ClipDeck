@@ -54,6 +54,7 @@ final class KeyboardViewController: UIInputViewController {
     private var keyViews: [KeyRowView] = []
     private var rows: [[KeySpec]] = []
     private var panelHost: UIHostingController<AnyView>?
+    private var emojiPanel: EmojiPanelView?
 
     // Popup central reutilizable
     private let popup = UILabel()
@@ -248,6 +249,7 @@ final class KeyboardViewController: UIInputViewController {
         let areaH = H - topH
         keyboardArea.frame = CGRect(x: 0, y: areaY, width: W, height: areaH)
         panelHost?.view.frame = keyboardArea.frame
+        emojiPanel?.frame = keyboardArea.frame
 
         // Distribuye las filas para rellenar la altura disponible.
         let rowCount = CGFloat(keyViews.count)
@@ -740,18 +742,37 @@ final class KeyboardViewController: UIInputViewController {
         switch mode {
         case .keys:      showKeyboard()
         case .clipboard: showPanel(AnyView(clipboardPanel()))
-        case .emoji:     showPanel(AnyView(EmojiPanel(insert: { [weak self] e in
-                                            self?.textDocumentProxy.insertText(e)
-                                            EmojiStore.registerRecent(e)
-                                            self?.keyFeedback()
-                                        },
-                                        backToKeys: { [weak self] in self?.mode = .keys; self?.refreshMode() },
-                                        deleteBackward: { [weak self] in self?.textDocumentProxy.deleteBackward() })))
+        case .emoji:     showEmojiPanel()
         }
+    }
+
+    private func showEmojiPanel() {
+        keyboardArea.isHidden = true
+        panelHost?.view.isHidden = true
+        suggestionButtons.forEach { $0.isHidden = true }
+        separatorViews.forEach { $0.isHidden = true }
+        if emojiPanel == nil {
+            let panel = EmojiPanelView()
+            panel.insert = { [weak self] e in
+                self?.textDocumentProxy.insertText(e)
+                EmojiStore.registerRecent(e)
+                self?.keyFeedback()
+            }
+            panel.backToKeys = { [weak self] in self?.mode = .keys; self?.refreshMode() }
+            panel.deleteDown = { [weak self] in self?.backspaceDown() }
+            panel.deleteUp = { [weak self] in self?.backspaceUp() }
+            root.addSubview(panel)
+            emojiPanel = panel
+        }
+        emojiPanel?.isHidden = false
+        emojiPanel?.frame = keyboardArea.frame
+        emojiPanel?.reloadCurrent()
+        if let ep = emojiPanel { root.bringSubviewToFront(ep) }
     }
 
     private func showKeyboard() {
         panelHost?.view.isHidden = true
+        emojiPanel?.isHidden = true
         keyboardArea.isHidden = false
         suggestionButtons.forEach { $0.isHidden = $0.text.isEmpty }
         separatorViews.forEach { $0.isHidden = false }
@@ -760,6 +781,7 @@ final class KeyboardViewController: UIInputViewController {
 
     private func showPanel(_ v: AnyView) {
         keyboardArea.isHidden = true
+        emojiPanel?.isHidden = true
         suggestionButtons.forEach { $0.isHidden = true }
         separatorViews.forEach { $0.isHidden = true }
         if panelHost == nil {
@@ -774,6 +796,7 @@ final class KeyboardViewController: UIInputViewController {
         }
         panelHost?.view.isHidden = false
         panelHost?.view.frame = keyboardArea.frame
+        emojiPanel?.frame = keyboardArea.frame
         if let hv = panelHost?.view { root.bringSubviewToFront(hv) }
     }
 
@@ -1183,62 +1206,6 @@ enum EmojiStore {
     ]
 }
 
-struct EmojiPanel: View {
-    let insert: (String) -> Void
-    let backToKeys: () -> Void
-    let deleteBackward: () -> Void
-    @State private var categoryIndex = -1
-
-    private var current: [String] {
-        if categoryIndex == -1 {
-            let r = EmojiStore.recents
-            return r.isEmpty ? EmojiStore.categories[0].emojis : r
-        }
-        return EmojiStore.categories[categoryIndex].emojis
-    }
-
-    var body: some View {
-        VStack(spacing: 4) {
-            ScrollView {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 8), spacing: 2) {
-                    ForEach(current, id: \.self) { e in
-                        Text(e).font(.system(size: 28)).frame(maxWidth: .infinity).frame(height: 38)
-                            .contentShape(Rectangle())
-                            .onTapGesture { insert(e) }
-                    }
-                }
-                .padding(.top, 4)
-            }
-            HStack(spacing: 2) {
-                Text("ABC").font(.subheadline).frame(width: 46, height: 34)
-                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 7))
-                    .contentShape(Rectangle())
-                    .onTapGesture { backToKeys() }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 2) {
-                        catButton("🕐", -1)
-                        ForEach(Array(EmojiStore.categories.enumerated()), id: \.offset) { i, c in
-                            catButton(c.icon, i)
-                        }
-                    }
-                }
-                Image(systemName: "delete.left").font(.body).frame(width: 40, height: 34)
-                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 7))
-                    .contentShape(Rectangle())
-                    .onTapGesture { deleteBackward() }
-            }
-            .padding(.horizontal, 3).padding(.bottom, 3)
-        }
-    }
-
-    private func catButton(_ icon: String, _ index: Int) -> some View {
-        Text(icon).font(.system(size: 18)).frame(width: 34, height: 34)
-            .background(categoryIndex == index ? Color.accentColor.opacity(0.22) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 7))
-            .contentShape(Rectangle())
-            .onTapGesture { categoryIndex = index }
-    }
-}
 
 // MARK: - Botón de sugerencia (toque propio, fiable en teclados)
 
@@ -1302,5 +1269,261 @@ final class SuggestionButton: UIView {
         backgroundColor = .clear
         if tap && !didLong && !text.isEmpty { onTap?(text) }
         didLong = false
+    }
+}
+
+// MARK: - Panel de emojis en UIKit (scroll fluido + tonos de piel)
+
+final class EmojiCell: UICollectionViewCell {
+    let label = UILabel()
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        label.textAlignment = .center
+        label.font = .systemFont(ofSize: 30)
+        label.frame = bounds
+        label.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        contentView.addSubview(label)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
+    var insert: ((String) -> Void)?
+    var backToKeys: (() -> Void)?
+    var deleteDown: (() -> Void)?
+    var deleteUp: (() -> Void)?
+
+    private var collection: UICollectionView!
+    private let bottomBar = UIView()
+    private let abcButton = UIButton(type: .system)
+    private let deleteButton = UIButton(type: .system)
+    private let categoryScroll = UIScrollView()
+    private var categoryButtons: [UIButton] = []
+
+    private var categoryIndex = -1            // -1 = recientes
+    private var current: [String] = []
+    private var tonePopup: UIView?
+
+    private let tonesKey = "keyboard.emojiTones"   // [baseEmoji: toneIndex 0...4]
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+
+        let layout = UICollectionViewFlowLayout()
+        layout.scrollDirection = .vertical
+        layout.minimumInteritemSpacing = 0
+        layout.minimumLineSpacing = 2
+        collection = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        collection.backgroundColor = .clear
+        collection.dataSource = self
+        collection.delegate = self
+        collection.alwaysBounceVertical = true
+        collection.register(EmojiCell.self, forCellWithReuseIdentifier: "e")
+        addSubview(collection)
+
+        let lp = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
+        lp.minimumPressDuration = 0.35
+        collection.addGestureRecognizer(lp)
+
+        bottomBar.backgroundColor = .clear
+        addSubview(bottomBar)
+
+        abcButton.setTitle("ABC", for: .normal)
+        abcButton.titleLabel?.font = .systemFont(ofSize: 15)
+        abcButton.setTitleColor(.label, for: .normal)
+        abcButton.backgroundColor = .secondarySystemBackground
+        abcButton.layer.cornerRadius = 7
+        abcButton.addTarget(self, action: #selector(tapABC), for: .touchUpInside)
+        bottomBar.addSubview(abcButton)
+
+        deleteButton.setImage(UIImage(systemName: "delete.left"), for: .normal)
+        deleteButton.tintColor = .label
+        deleteButton.backgroundColor = .secondarySystemBackground
+        deleteButton.layer.cornerRadius = 7
+        deleteButton.addTarget(self, action: #selector(delDown), for: .touchDown)
+        deleteButton.addTarget(self, action: #selector(delUp), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        bottomBar.addSubview(deleteButton)
+
+        categoryScroll.showsHorizontalScrollIndicator = false
+        bottomBar.addSubview(categoryScroll)
+        for (i, cat) in EmojiCatalog.categories.enumerated() {
+            let b = makeCatButton(cat.icon, index: i)
+            categoryScroll.addSubview(b)
+            categoryButtons.append(b)
+        }
+        // botón de recientes al inicio
+        let rec = makeCatButton("🕐", index: -1)
+        categoryScroll.addSubview(rec)
+        categoryButtons.insert(rec, at: 0)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func makeCatButton(_ icon: String, index: Int) -> UIButton {
+        let b = UIButton(type: .system)
+        b.setTitle(icon, for: .normal)
+        b.titleLabel?.font = .systemFont(ofSize: 18)
+        b.tag = index
+        b.layer.cornerRadius = 7
+        b.addTarget(self, action: #selector(tapCategory(_:)), for: .touchUpInside)
+        return b
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let barH: CGFloat = 42
+        collection.frame = CGRect(x: 0, y: 2, width: bounds.width, height: bounds.height - barH - 2)
+        bottomBar.frame = CGRect(x: 0, y: bounds.height - barH, width: bounds.width, height: barH)
+
+        abcButton.frame = CGRect(x: 4, y: 4, width: 48, height: 34)
+        deleteButton.frame = CGRect(x: bounds.width - 48, y: 4, width: 44, height: 34)
+        categoryScroll.frame = CGRect(x: 56, y: 4, width: bounds.width - 56 - 52, height: 34)
+        var x: CGFloat = 0
+        for b in categoryButtons {
+            b.frame = CGRect(x: x, y: 0, width: 36, height: 34)
+            x += 38
+        }
+        categoryScroll.contentSize = CGSize(width: x, height: 34)
+        highlightCategory()
+    }
+
+    func reloadCurrent() {
+        if categoryIndex == -1 {
+            let recents = EmojiStore.recents
+            current = recents.isEmpty ? EmojiCatalog.categories.first?.emojis ?? [] : recents
+        } else if categoryIndex >= 0 && categoryIndex < EmojiCatalog.categories.count {
+            current = EmojiCatalog.categories[categoryIndex].emojis
+        }
+        collection.reloadData()
+        collection.setContentOffset(.zero, animated: false)
+        highlightCategory()
+    }
+
+    private func highlightCategory() {
+        for b in categoryButtons {
+            b.backgroundColor = (b.tag == categoryIndex) ? UIColor.tintColor.withAlphaComponent(0.22) : .clear
+        }
+    }
+
+    // Aplica el tono guardado a un emoji base (si lo tiene).
+    private func displayed(_ base: String) -> String {
+        guard EmojiCatalog.skinToneBase.contains(base) else { return base }
+        let dict = UserDefaults.standard.dictionary(forKey: tonesKey) as? [String: Int] ?? [:]
+        if let i = dict[base], i >= 0, i < EmojiCatalog.skinTones.count {
+            return base + EmojiCatalog.skinTones[i]
+        }
+        return base
+    }
+
+    // MARK: DataSource
+
+    func collectionView(_ c: UICollectionView, numberOfItemsInSection s: Int) -> Int { current.count }
+
+    func collectionView(_ c: UICollectionView, cellForItemAt ip: IndexPath) -> UICollectionViewCell {
+        let cell = c.dequeueReusableCell(withReuseIdentifier: "e", for: ip) as! EmojiCell
+        cell.label.text = displayed(current[ip.item])
+        return cell
+    }
+
+    func collectionView(_ c: UICollectionView, layout: UICollectionViewLayout,
+                        sizeForItemAt ip: IndexPath) -> CGSize {
+        let cols: CGFloat = 8
+        let w = floor(bounds.width / cols)
+        return CGSize(width: w, height: 40)
+    }
+
+    func collectionView(_ c: UICollectionView, didSelectItemAt ip: IndexPath) {
+        insert?(displayed(current[ip.item]))
+    }
+
+    // MARK: Acciones
+
+    @objc private func tapABC() { backToKeys?() }
+    @objc private func delDown() { deleteDown?() }
+    @objc private func delUp() { deleteUp?() }
+    @objc private func tapCategory(_ sender: UIButton) {
+        categoryIndex = sender.tag
+        reloadCurrent()
+    }
+
+    // MARK: Tonos de piel (mantener pulsado)
+
+    @objc private func handleLongPress(_ gr: UILongPressGestureRecognizer) {
+        guard gr.state == .began else { return }
+        let pt = gr.location(in: collection)
+        guard let ip = collection.indexPathForItem(at: pt) else { return }
+        let base = current[ip.item]
+        guard EmojiCatalog.skinToneBase.contains(base),
+              let cell = collection.cellForItem(at: ip) else { return }
+        showTonePopup(base: base, over: cell)
+    }
+
+    private func showTonePopup(base: String, over cell: UICollectionViewCell) {
+        dismissTonePopup()
+        let options = [base] + EmojiCatalog.skinTones.map { base + $0 }  // amarillo + 5 tonos
+        let cellW: CGFloat = 40
+        let w = CGFloat(options.count) * cellW + 8
+        let h: CGFloat = 46
+        let cf = cell.convert(cell.bounds, to: self)
+        var x = cf.midX - w / 2
+        x = min(max(x, 4), bounds.width - w - 4)
+        let y = max(cf.minY - h - 4, 2)
+        let bar = UIView(frame: CGRect(x: x, y: y, width: w, height: h))
+        bar.backgroundColor = .systemGray4
+        bar.layer.cornerRadius = 10
+        bar.layer.shadowColor = UIColor.black.cgColor
+        bar.layer.shadowOpacity = 0.25
+        bar.layer.shadowRadius = 5
+        bar.layer.shadowOffset = CGSize(width: 0, height: 2)
+        addSubview(bar)
+
+        for (i, opt) in options.enumerated() {
+            let btn = UIButton(type: .system)
+            btn.setTitle(opt, for: .normal)
+            btn.titleLabel?.font = .systemFont(ofSize: 26)
+            btn.frame = CGRect(x: 4 + CGFloat(i) * cellW, y: 4, width: cellW, height: h - 8)
+            btn.tag = i        // 0 = amarillo, 1...5 = tono i-1
+            btn.addTarget(self, action: #selector(pickTone(_:)), for: .touchUpInside)
+            bar.addSubview(btn)
+        }
+        tonePopup = bar
+        // objeto base guardado para el handler
+        objc_setAssociatedObject(bar, &EmojiPanelView.baseKey, base, .OBJC_ASSOCIATION_RETAIN)
+    }
+
+    private static var baseKey: UInt8 = 0
+
+    @objc private func pickTone(_ sender: UIButton) {
+        guard let bar = tonePopup,
+              let base = objc_getAssociatedObject(bar, &EmojiPanelView.baseKey) as? String else { return }
+        var dict = UserDefaults.standard.dictionary(forKey: tonesKey) as? [String: Int] ?? [:]
+        let result: String
+        if sender.tag == 0 {
+            dict[base] = nil            // amarillo por defecto
+            result = base
+        } else {
+            let idx = sender.tag - 1
+            dict[base] = idx
+            result = base + EmojiCatalog.skinTones[idx]
+        }
+        UserDefaults.standard.set(dict, forKey: tonesKey)
+        dismissTonePopup()
+        insert?(result)
+        EmojiStore.registerRecent(result)
+        collection.reloadData()
+    }
+
+    private func dismissTonePopup() {
+        tonePopup?.removeFromSuperview()
+        tonePopup = nil
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        // Si hay popup abierto y se toca fuera, ciérralo.
+        if let bar = tonePopup {
+            let inBar = bar.frame.contains(point)
+            if !inBar { dismissTonePopup() }
+        }
+        return super.hitTest(point, with: event)
     }
 }
