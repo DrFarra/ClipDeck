@@ -47,7 +47,6 @@ final class KeyboardViewController: UIInputViewController {
     private let clipboardButton = UIButton(type: .system)
     private let emojiButton = UIButton(type: .system)
     private var suggestionButtons: [UIButton] = []
-    private let suggestionStack = UIStackView()
     private var separatorViews: [UIView] = []
     private let keyboardArea = UIView()
     private var keyViews: [KeyRowView] = []
@@ -133,11 +132,6 @@ final class KeyboardViewController: UIInputViewController {
         emojiButton.addTarget(self, action: #selector(toggleEmoji), for: .touchDown)
         topBar.addSubview(emojiButton)
 
-        suggestionStack.axis = .horizontal
-        suggestionStack.distribution = .fillEqually
-        suggestionStack.alignment = .fill
-        suggestionStack.spacing = 0
-        topBar.addSubview(suggestionStack)
         for i in 0..<3 {
             let b = UIButton(type: .system)
             b.titleLabel?.font = .systemFont(ofSize: 17)
@@ -145,16 +139,19 @@ final class KeyboardViewController: UIInputViewController {
             b.titleLabel?.minimumScaleFactor = 0.7
             b.titleLabel?.lineBreakMode = .byTruncatingTail
             b.setTitleColor(.label, for: .normal)
+            b.tag = i
             b.addTarget(self, action: #selector(tapSuggestion(_:)), for: .touchUpInside)
+            let lp = UILongPressGestureRecognizer(target: self, action: #selector(longPressSuggestion(_:)))
+            lp.minimumPressDuration = 0.4
+            b.addGestureRecognizer(lp)
+            topBar.addSubview(b)
             suggestionButtons.append(b)
             if i > 0 {
                 let sep = UIView()
                 sep.backgroundColor = .separator
-                sep.widthAnchor.constraint(equalToConstant: 1).isActive = true
+                topBar.addSubview(sep)
                 separatorViews.append(sep)
-                suggestionStack.addArrangedSubview(sep)
             }
-            suggestionStack.addArrangedSubview(b)
         }
     }
 
@@ -242,8 +239,14 @@ final class KeyboardViewController: UIInputViewController {
         clipboardButton.frame = CGRect(x: 4, y: 3, width: btn, height: 34)
         emojiButton.frame = CGRect(x: W - btn - 4, y: 3, width: btn, height: 34)
         let sugX = clipboardButton.frame.maxX + 4
-        suggestionStack.frame = CGRect(x: sugX, y: 3,
-                                       width: max(emojiButton.frame.minX - 4 - sugX, 0), height: 34)
+        let sugTotal = max(emojiButton.frame.minX - 4 - sugX, 0)
+        let sugW = sugTotal / 3
+        for (i, b) in suggestionButtons.enumerated() {
+            b.frame = CGRect(x: sugX + CGFloat(i) * sugW, y: 3, width: sugW, height: 34)
+        }
+        for (i, sep) in separatorViews.enumerated() {
+            sep.frame = CGRect(x: sugX + CGFloat(i + 1) * sugW - 0.5, y: 10, width: 1, height: 20)
+        }
 
         let areaY = topH
         let areaH = H - topH
@@ -429,23 +432,45 @@ final class KeyboardViewController: UIInputViewController {
         }
     }
 
+    /// Programa el cálculo de sugerencias en segundo plano con debounce, para
+    /// que el corrector no bloquee nunca la siguiente pulsación de tecla.
     private func scheduleSuggestions() {
         guard config.prediction else { setSuggestions([]); return }
         suggestionWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.computeSuggestions() }
+        let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        let lex = lexicon
+        let last = lastCommittedWord
+        let capNext = shift != .off
+        let work = DispatchWorkItem {
+            let result = KeyboardViewController.computeSuggestions(before: before, lexicon: lex,
+                                                                  lastWord: last, capitalizeNext: capNext)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.mode == .keys else { return }
+                self.setSuggestions(result)
+            }
+        }
         suggestionWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01, execute: work)
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.08, execute: work)
     }
 
-    private func computeSuggestions() {
-        let word = currentWord()
-        // Sin palabra en curso (vacío, espacio, o algo sin letras): sugerir la
-        // próxima palabra probable en vez de dejar la barra vacía.
+    /// Cálculo puro (sin tocar UI) — seguro en segundo plano.
+    private static func computeSuggestions(before: String, lexicon: [String],
+                                           lastWord: String, capitalizeNext: Bool) -> [String] {
+        let word = wordBefore(before)
         if word.isEmpty || word.count < 2 || word.rangeOfCharacter(from: .letters) == nil {
-            setSuggestions(nextWordSuggestions(), revert: nil); return
+            var r: [String] = []
+            if !lastWord.isEmpty { r += WordLearner.successors(of: lastWord) }
+            let blocked = WordLearner.blockedWords()
+            for w in KbData.commonWords {
+                if r.count >= 3 { break }
+                if !r.contains(w) && !blocked.contains(w) { r.append(w) }
+            }
+            return Array(r.prefix(3)).map { capitalizeNext ? $0.prefix(1).uppercased() + $0.dropFirst() : $0 }
         }
+
         let lower = word.lowercased()
         let capitalize = word.first?.isUppercase == true
+        let blocked = WordLearner.blockedWords()
         var results = WordLearner.matches(prefix: lower, limit: 2)
 
         for entry in lexicon where entry.lowercased().hasPrefix(lower) {
@@ -463,23 +488,12 @@ final class KeyboardViewController: UIInputViewController {
         var seen = Set<String>(); var unique: [String] = []
         for cand in results {
             let k = cand.lowercased()
-            guard k != lower, !seen.contains(k) else { continue }
+            guard k != lower, !seen.contains(k), !blocked.contains(k) else { continue }
             seen.insert(k)
             unique.append(capitalize ? cand.prefix(1).uppercased() + cand.dropFirst() : cand)
             if unique.count == 3 { break }
         }
-        setSuggestions(unique)
-    }
-
-    private func nextWordSuggestions() -> [String] {
-        var r: [String] = []
-        if !lastCommittedWord.isEmpty { r += WordLearner.successors(of: lastCommittedWord) }
-        for w in KbData.commonWords {
-            if r.count >= 3 { break }
-            if !r.contains(w) { r.append(w) }
-        }
-        let cap = shift != .off
-        return Array(r.prefix(3)).map { cap ? $0.prefix(1).uppercased() + $0.dropFirst() : $0 }
+        return unique
     }
 
     private func setSuggestions(_ words: [String], revert: String? = nil) {
@@ -497,10 +511,20 @@ final class KeyboardViewController: UIInputViewController {
                 b.isHidden = true
             }
         }
-        // Muestra un separador sólo si el botón siguiente tiene contenido.
         for (i, sep) in separatorViews.enumerated() {
             sep.isHidden = (i + 1) >= titles.count
         }
+    }
+
+    @objc private func longPressSuggestion(_ gr: UILongPressGestureRecognizer) {
+        guard gr.state == .began, let b = gr.view as? UIButton,
+              var word = b.title(for: .normal), !word.isEmpty else { return }
+        if word.hasPrefix("↺ ") { word = String(word.dropFirst(2)) }
+        keyFeedback()
+        WordLearner.forget(word)
+        // Aviso breve y recálculo
+        showHint("«\(word)» ya no se sugerirá")
+        scheduleSuggestions()
     }
 
     @objc private func tapSuggestion(_ sender: UIButton) {
@@ -522,7 +546,7 @@ final class KeyboardViewController: UIInputViewController {
         lastCommittedWord = title
         pendingRevert = nil
         updateShiftFromContext()
-        setSuggestions(nextWordSuggestions())
+        scheduleSuggestions()
     }
 
     private func autocorrection(for word: String) -> String? {
@@ -554,7 +578,7 @@ final class KeyboardViewController: UIInputViewController {
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         guard let last = before.last else { return }
         let sep = String(last)
-        let corrected = wordBefore(String(before.dropLast()))
+        let corrected = KeyboardViewController.wordBefore(String(before.dropLast()))
         for _ in 0..<(corrected.count + 1) { textDocumentProxy.deleteBackward() }
         textDocumentProxy.insertText(original + sep)
         WordLearner.learn(original)
@@ -568,9 +592,11 @@ final class KeyboardViewController: UIInputViewController {
         textDocumentProxy.insertText(replacement)
     }
 
-    private func currentWord() -> String { wordBefore(textDocumentProxy.documentContextBeforeInput ?? "") }
+    private func currentWord() -> String {
+        KeyboardViewController.wordBefore(textDocumentProxy.documentContextBeforeInput ?? "")
+    }
 
-    private func wordBefore(_ text: String) -> String {
+    private static func wordBefore(_ text: String) -> String {
         let sep = CharacterSet.whitespacesAndNewlines
             .union(CharacterSet(charactersIn: ".,;:!?¿¡\"'()[]{}"))
         if let r = text.rangeOfCharacter(from: sep, options: .backwards) {
@@ -612,13 +638,15 @@ final class KeyboardViewController: UIInputViewController {
     private func showKeyboard() {
         panelHost?.view.isHidden = true
         keyboardArea.isHidden = false
-        suggestionStack.isHidden = false
+        suggestionButtons.forEach { $0.isHidden = ($0.title(for: .normal) == nil) }
+        separatorViews.forEach { $0.isHidden = false }
         scheduleSuggestions()
     }
 
     private func showPanel(_ v: AnyView) {
         keyboardArea.isHidden = true
-        suggestionStack.isHidden = true
+        suggestionButtons.forEach { $0.isHidden = true }
+        separatorViews.forEach { $0.isHidden = true }
         if panelHost == nil {
             let host = UIHostingController(rootView: v)
             host.view.backgroundColor = .clear
