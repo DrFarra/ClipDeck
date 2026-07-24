@@ -39,13 +39,23 @@ final class KeyboardViewController: UIInputViewController {
     private var deleteTimer: Timer?
     private var suggestionWork: DispatchWorkItem?
 
+    // Escritura deslizando
+    private var swipeActive = false
+    private var swipeReady = false
+    private var swipePoints: [CGPoint] = []
+    private var swipeTrail: SwipeTrailView?
+    private var swipeCenters: [UInt8: CGPoint] = [:]
+    private var swipePitch: CGFloat = 40
+    private var swipeStartChar = ""
+    private var swipeToken = 0
+
     private let haptic = UIImpactFeedbackGenerator(style: .light)
     private let longPressHaptic = UIImpactFeedbackGenerator(style: .medium)
     private let selectionHaptic = UISelectionFeedbackGenerator()
 
     // UI
     private var root: FeedbackHostView!
-    private let topBar = UIView()
+    private let topBar = TopBarView()
     private let clipboardButton = IconTouchButton()
     private let emojiButton = IconTouchButton()
     private var suggestionButtons: [SuggestionButton] = []
@@ -104,6 +114,18 @@ final class KeyboardViewController: UIInputViewController {
         rebuildKeys()
         precomputeChecker()
         prewarmEmojiPanel()
+        prepareSwipe()
+    }
+
+    /// Carga el vocabulario de deslizamiento en segundo plano: leerlo en el
+    /// hilo principal congelaría la apertura del teclado.
+    private func prepareSwipe() {
+        guard config.swipe else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            SwipeLexicon.shared.load()
+            let ready = SwipeLexicon.shared.isLoaded
+            DispatchQueue.main.async { self?.swipeReady = ready }
+        }
     }
 
     /// Crea el panel de emojis por adelantado (oculto) para que el primer
@@ -164,6 +186,9 @@ final class KeyboardViewController: UIInputViewController {
         emojiButton.setSymbol("face.smiling")
         emojiButton.onTap = { [weak self] in self?.toggleEmoji() }
         topBar.addSubview(emojiButton)
+
+        topBar.leftButton = clipboardButton
+        topBar.rightButton = emojiButton
 
         for i in 0..<3 {
             let b = SuggestionButton()
@@ -262,9 +287,11 @@ final class KeyboardViewController: UIInputViewController {
         let topH: CGFloat = 40
         topBar.frame = CGRect(x: 0, y: 0, width: W, height: topH)
 
-        let btn: CGFloat = 44
-        clipboardButton.frame = CGRect(x: 4, y: 3, width: btn, height: 34)
-        emojiButton.frame = CGRect(x: W - btn - 4, y: 3, width: btn, height: 34)
+        // Ocupan toda la altura de la barra: cuanto mayor sea el blanco, menos
+        // posibilidades hay de fallar el toque.
+        let btn: CGFloat = 52
+        clipboardButton.frame = CGRect(x: 0, y: 0, width: btn, height: topH)
+        emojiButton.frame = CGRect(x: W - btn, y: 0, width: btn, height: topH)
         let sugX = clipboardButton.frame.maxX + 4
         let sugTotal = max(emojiButton.frame.minX - 4 - sugX, 0)
         let sugW = sugTotal / 3
@@ -558,9 +585,9 @@ final class KeyboardViewController: UIInputViewController {
             }
         }
 
-        // Vertical: cada ~22 pt salta una línea.
+        // Vertical: cada N pt salta una línea (configurable en ajustes).
         trackpadAccumY += dy
-        let stepY: CGFloat = 22
+        let stepY = max(CGFloat(config.trackpadStepY), 8)
         if abs(trackpadAccumY) >= stepY {
             let lines = Int(trackpadAccumY / stepY)
             trackpadAccumY -= CGFloat(lines) * stepY
@@ -594,7 +621,7 @@ final class KeyboardViewController: UIInputViewController {
         guard lines != 0 else { return }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         let after = textDocumentProxy.documentContextAfterInput ?? ""
-        let fallbackLineLength = 38
+        let fallbackLineLength = max(Int(config.trackpadChars), 8)
 
         if lines < 0 {
             for _ in 0..<(-lines) {
@@ -619,6 +646,144 @@ final class KeyboardViewController: UIInputViewController {
                 }
             }
         }
+    }
+
+    // MARK: - Escritura deslizando
+
+    var isSwipeActive: Bool { swipeActive }
+
+    /// Sólo con el diccionario ya cargado, en el teclado de letras y fuera del
+    /// modo trackpad.
+    var swipeEnabled: Bool { config.swipe && swipeReady && !symbolsMode && !trackpadActive }
+
+    /// Empieza un trazo. La letra que se insertó al tocar la tecla se retira,
+    /// porque va a ser reemplazada por la palabra completa.
+    func beginSwipe(startChar: String, from point: CGPoint) {
+        guard !swipeActive, swipeEnabled else { return }
+        swipeActive = true
+        swipeStartChar = startChar
+        textDocumentProxy.deleteBackward()
+        suggestionWork?.cancel()
+        hidePopup()
+        selectionFeedback()
+        rebuildSwipeGeometry()
+        swipePoints = [point]
+
+        let trail: SwipeTrailView
+        if let existing = swipeTrail {
+            trail = existing
+        } else {
+            let t = SwipeTrailView(frame: view.bounds)
+            root.addSubview(t)
+            swipeTrail = t
+            trail = t
+        }
+        trail.frame = view.bounds
+        root.bringSubviewToFront(trail)
+        trail.begin(at: point)
+    }
+
+    func swipeMove(to point: CGPoint) {
+        guard swipeActive else { return }
+        if let last = swipePoints.last, hypot(point.x - last.x, point.y - last.y) < 2 { return }
+        swipePoints.append(point)
+        swipeTrail?.add(point)
+    }
+
+    func endSwipe(cancelled: Bool) {
+        guard swipeActive else { return }
+        swipeActive = false
+        swipeTrail?.finish()
+
+        let points = swipePoints
+        swipePoints = []
+        let startChar = swipeStartChar
+        swipeStartChar = ""
+
+        let long = SwipeRecognizer.traceLength(points) > swipePitch * 1.6
+        guard !cancelled, points.count > 3, long else {
+            restoreSwipeStart(startChar)
+            return
+        }
+
+        swipeToken += 1
+        let token = swipeToken
+        let centers = swipeCenters
+        let pitch = swipePitch
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let words = SwipeRecognizer.recognize(points: points, keyCenters: centers, pitch: pitch)
+            DispatchQueue.main.async {
+                guard let self, self.swipeToken == token else { return }
+                self.applySwipe(words, startChar: startChar)
+            }
+        }
+    }
+
+    /// El trazo fue demasiado corto o se canceló: se devuelve la letra tocada.
+    private func restoreSwipeStart(_ startChar: String) {
+        guard !startChar.isEmpty else { return }
+        textDocumentProxy.insertText(startChar)
+        scheduleSuggestions()
+    }
+
+    private func applySwipe(_ words: [String], startChar: String) {
+        guard let best = words.first else {
+            showHint("Sin coincidencia")
+            scheduleSuggestions()
+            return
+        }
+
+        let capitalize = startChar.first?.isUppercase == true
+        let word = capitalize ? best.prefix(1).uppercased() + best.dropFirst() : best
+
+        // Separación automática con la palabra anterior, como en Gboard.
+        let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        if let last = before.last, last != " ", last != "\n" {
+            textDocumentProxy.insertText(" ")
+        }
+        textDocumentProxy.insertText(word)
+        // La confirmación del trazo va con la vibración de gestos, que es la
+        // que el usuario deja activa aunque silencie la de teclas.
+        longPressFeedback()
+
+        if config.learnWords {
+            let previous = lastCommittedWord
+            DispatchQueue.global(qos: .utility).async {
+                WordLearner.learn(best)
+                if !previous.isEmpty { WordLearner.learnBigram(previous: previous, next: best) }
+            }
+        }
+        lastCommittedWord = best
+        pendingRevert = nil
+        if shift == .on && !symbolsMode { shift = .off; updateKeyCaps() }
+
+        // Alternativas a un toque en la barra de sugerencias.
+        var alternatives: [String] = []
+        for w in words.dropFirst().prefix(3) {
+            alternatives.append(capitalize ? w.prefix(1).uppercased() + w.dropFirst() : w)
+        }
+        if alternatives.isEmpty {
+            scheduleSuggestions()
+        } else {
+            setSuggestions(alternatives)
+        }
+    }
+
+    /// Centro de cada tecla de letra, para comparar el trazo con las palabras.
+    private func rebuildSwipeGeometry() {
+        var centers: [UInt8: CGPoint] = [:]
+        var widest: CGFloat = 0
+        for rowView in keyViews {
+            for k in rowView.letterKeys() {
+                guard let ch = k.spec.value.lowercased().first,
+                      let idx = SwipeAlphabet.index(ch) else { continue }
+                let f = k.convert(k.bounds, to: view)
+                centers[idx] = CGPoint(x: f.midX, y: f.midY)
+                if f.width > widest { widest = f.width }
+            }
+        }
+        swipeCenters = centers
+        swipePitch = widest > 1 ? widest + 5 : 40
     }
 
     func returnTap() { commit("\n") }
@@ -1100,6 +1265,9 @@ final class KeyRowView: UIView {
         for k in keys { k.setDimmed(dimmed) }
     }
 
+    /// Teclas de carácter (para calcular la geometría del deslizamiento).
+    func letterKeys() -> [KeyView] { keys.filter { $0.spec.kind == .char } }
+
     func applyShift(_ upper: Bool, caps: Bool) {
         for k in keys {
             k.applyShift(upper)
@@ -1132,12 +1300,17 @@ final class KeyView: UIView {
     private var upper = false
     private var longTimer: Timer?
     private var accentBar: UIView?
+    private var accentBarFrame: CGRect = .zero
     private var accentLabels: [UILabel] = []
+    private let accentCellWidth: CGFloat = 34
     private var selectedAccent = 0
     private var isDown = false
     private var shiftActive = false
     private var pressStart: CFTimeInterval = 0
     private var spaceTracking = false
+    private var startPoint: CGPoint = .zero
+    private var insertedChar = ""
+    private var swiping = false
     private var spaceStartX: CGFloat = 0
     private var spaceConsumed = 0
     private var trackpadTimer: Timer?
@@ -1225,11 +1398,17 @@ final class KeyView: UIView {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard !isDown else { return }
         isDown = true
+        swiping = false
+        insertedChar = ""
+        if let t = touches.first, let root = controller?.view {
+            startPoint = t.location(in: root)
+        }
         pressStart = CACurrentMediaTime()
         setPressed(true)
         switch spec.kind {
         case .char:
             controller?.insertChar(baseValue)
+            insertedChar = upper ? baseValue.uppercased() : baseValue
             controller?.showPopup(for: self, text: upper ? baseValue.uppercased() : baseValue)
             if !spec.variants.isEmpty {
                 longTimer?.invalidate()
@@ -1265,6 +1444,12 @@ final class KeyView: UIView {
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let t = touches.first else { return }
 
+        // Trazo en curso: el dedo dibuja la palabra.
+        if swiping {
+            if let root = controller?.view { controller?.swipeMove(to: t.location(in: root)) }
+            return
+        }
+
         // Modo trackpad activo: el dedo mueve el cursor esté donde esté.
         if controller?.isTrackpadActive == true {
             if let root = controller?.view {
@@ -1273,9 +1458,13 @@ final class KeyView: UIView {
             return
         }
 
-        if accentBar != nil {
-            let p = t.location(in: self)
-            let slot = Int((p.x + 20) / 34)
+        // La barra se recorta contra los bordes de la pantalla, así que la
+        // opción seleccionada se calcula sobre la posición REAL de la barra y
+        // no sobre la tecla: si no, en las teclas laterales la última opción
+        // caía fuera del alcance del dedo.
+        if accentBar != nil, let rootView = controller?.view {
+            let px = t.location(in: rootView).x
+            let slot = Int(floor((px - accentBarFrame.minX - 4) / accentCellWidth))
             let newIndex = min(max(slot, 0), spec.variants.count - 1)
             if newIndex != selectedAccent {
                 selectedAccent = newIndex
@@ -1284,6 +1473,20 @@ final class KeyView: UIView {
             }
             return
         }
+        // ¿El dedo salió de la tecla sin levantarse? Entonces es un trazo.
+        if spec.kind == .char, accentBar == nil, !insertedChar.isEmpty,
+           baseValue.first?.isLetter == true, controller?.swipeEnabled == true {
+            let local = t.location(in: self)
+            if !bounds.insetBy(dx: -4, dy: -4).contains(local), let root = controller?.view {
+                longTimer?.invalidate(); longTimer = nil
+                swiping = true
+                controller?.beginSwipe(startChar: insertedChar, from: startPoint)
+                controller?.swipeMove(to: t.location(in: root))
+                setPressed(false)
+                return
+            }
+        }
+
         if spec.kind == .space, let controller, controller.trackpadEnabled {
             let x = t.location(in: superview).x
             let dx = x - spaceStartX
@@ -1313,6 +1516,16 @@ final class KeyView: UIView {
         isDown = false
         longTimer?.invalidate(); longTimer = nil
         trackpadTimer?.invalidate(); trackpadTimer = nil
+
+        // Fin de un trazo: la palabra la resuelve el controlador.
+        if swiping {
+            swiping = false
+            insertedChar = ""
+            controller?.endSwipe(cancelled: cancelled)
+            setPressed(false)
+            controller?.hidePopup()
+            return
+        }
 
         // Si estábamos en modo trackpad, salir y no escribir nada.
         if controller?.isTrackpadActive == true {
@@ -1367,7 +1580,8 @@ final class KeyView: UIView {
         controller?.hidePopup()
         controller?.longPressFeedback()
         let variants = spec.variants
-        let cellW: CGFloat = 34, hgt: CGFloat = 44
+        let cellW = accentCellWidth
+        let hgt: CGFloat = 44
         let w = CGFloat(variants.count) * cellW + 8
         let kf = convert(bounds, to: root)
         var x = kf.midX - w / 2
@@ -1388,6 +1602,7 @@ final class KeyView: UIView {
             accentLabels.append(l)
         }
         accentBar = bar
+        accentBarFrame = bar.frame
         selectedAccent = 0
         highlightAccent()
     }
@@ -1896,15 +2111,16 @@ final class IconTouchButton: UIView {
     var onTap: (() -> Void)?
 
     private let imageView = UIImageView()
-    private var isDown = false
+    private var lastFire: CFTimeInterval = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         imageView.contentMode = .center
         imageView.tintColor = .label
+        imageView.isUserInteractionEnabled = false
         addSubview(imageView)
         layer.cornerRadius = 8
-        isMultipleTouchEnabled = false
+        isMultipleTouchEnabled = true
         isExclusiveTouch = false
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -1922,25 +2138,51 @@ final class IconTouchButton: UIView {
         backgroundColor = active ? UIColor.tintColor.withAlphaComponent(0.22) : .clear
     }
 
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard !isDown else { return }
-        isDown = true
+    /// Dispara la acción, evitando sólo el doble disparo inmediato.
+    ///
+    /// Antes había un `isDown` que bloqueaba la siguiente pulsación: si el
+    /// toque se perdía (abrir el panel añade vistas en pleno toque y UIKit
+    /// puede no entregar el final), el botón quedaba muerto para siempre.
+    func fire() {
+        let now = CACurrentMediaTime()
+        guard now - lastFire > 0.25 else { return }
+        lastFire = now
         alpha = 0.5
-        onTap?()                       // responde al primer contacto
+        UIView.animate(withDuration: 0.12) { self.alpha = 1 }
+        onTap?()
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        fire()
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        isDown = false
         alpha = 1
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        isDown = false
         alpha = 1
     }
+}
 
-    /// Área táctil algo mayor que el icono, para no fallar el toque.
-    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        bounds.insetBy(dx: -6, dy: -4).contains(point)
+// MARK: - Barra superior
+//
+// Red de seguridad para los iconos de los extremos: si por lo que sea el toque
+// no llega al botón (queda a un pixel, lo intercepta otra vista, el botón se
+// quedó en un estado raro), lo recoge la propia barra y ejecuta la acción
+// igual. Toda la esquina izquierda y toda la derecha son zona activa.
+
+final class TopBarView: UIView {
+    weak var leftButton: IconTouchButton?
+    weak var rightButton: IconTouchButton?
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let t = touches.first else { return }
+        let x = t.location(in: self).x
+        if let left = leftButton, x <= left.frame.maxX + 6 {
+            left.fire()
+        } else if let right = rightButton, x >= right.frame.minX - 6 {
+            right.fire()
+        }
     }
 }
