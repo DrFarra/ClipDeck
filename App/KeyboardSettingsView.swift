@@ -76,7 +76,11 @@ struct KeyboardSettingsView: View {
 
     @ViewBuilder private var learnedSection: some View {
         Section("Palabras aprendidas") {
-            LabeledContent("Vocabulario personal", value: "\(learnedCount) palabras")
+            NavigationLink {
+                LearnedWordsView()
+            } label: {
+                LabeledContent("Vocabulario personal", value: "\(learnedCount) palabras")
+            }
             Button("Borrar palabras aprendidas", role: .destructive) {
                 showClearConfirm = true
             }
