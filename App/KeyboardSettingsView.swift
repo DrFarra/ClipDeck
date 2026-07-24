@@ -69,8 +69,11 @@ struct KeyboardSettingsView: View {
 
     @ViewBuilder private var feedbackSection: some View {
         Section("Respuesta al pulsar") {
-            Toggle("Vibración", isOn: $config.haptics)
+            Toggle("Vibración de teclas", isOn: $config.haptics)
+            Toggle("Vibración en pulsación larga", isOn: $config.hapticsLongPress)
             Toggle("Sonido de tecla", isOn: $config.sound)
+            Text("La segunda es independiente: vibra al abrir el globo de acentos, al pasar entre sus opciones y al activar el trackpad, aunque tengas apagada la de teclas.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -124,6 +127,7 @@ struct KeyboardSettingsView: View {
         store.set(config.trackpad, forKey: KbPrefs.spaceTrackpad)
         store.set(config.haptics, forKey: KbPrefs.haptics)
         store.set(config.sound, forKey: KbPrefs.sound)
+        store.set(config.hapticsLongPress, forKey: KbPrefs.hapticsLongPress)
         store.set(config.punctLeft, forKey: KbPrefs.punctLeft)
         store.set(config.punctRight, forKey: KbPrefs.punctRight)
     }
