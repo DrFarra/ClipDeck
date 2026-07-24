@@ -1,7 +1,15 @@
 import WidgetKit
 import SwiftUI
 
-private let appGroupID = "group.com.emilio.clipdeck"
+private let appGroupCandidates = ["group.com.emilio.clipdeck"] + (1...5).map { "group.1339403ddeb57d8b.\($0)" }
+
+private var resolvedGroupDefaults: UserDefaults? {
+    for id in appGroupCandidates
+    where FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: id) != nil {
+        return UserDefaults(suiteName: id)
+    }
+    return nil
+}
 
 struct ClipEntry: TimelineEntry {
     let date: Date
@@ -25,7 +33,7 @@ struct ClipProvider: TimelineProvider {
     }
 
     private func readEntry() -> ClipEntry {
-        let defaults = UserDefaults(suiteName: appGroupID)
+        let defaults = resolvedGroupDefaults
         return ClipEntry(
             date: .now,
             lastTitle: defaults?.string(forKey: "widget.lastTitle") ?? "Sin elementos",
