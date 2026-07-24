@@ -357,6 +357,7 @@ final class KeyboardViewController: UIInputViewController {
     func backspaceDown() {
         keyFeedback()
         textDocumentProxy.deleteBackward()
+        updateShiftFromContext()
         scheduleSuggestions()
         deleteRepeats = 0
         deleteTimer?.invalidate()
@@ -372,6 +373,7 @@ final class KeyboardViewController: UIInputViewController {
         deleteTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
             guard let self else { return }
             if self.deleteRepeats > 26 { self.deleteWord() } else { self.textDocumentProxy.deleteBackward() }
+            self.updateShiftFromContext()
             self.scheduleNextDelete()
         }
     }
@@ -391,6 +393,7 @@ final class KeyboardViewController: UIInputViewController {
         deleteTimer?.invalidate()
         deleteTimer = nil
         deleteRepeats = 0
+        updateShiftFromContext()
         scheduleSuggestions()
     }
 
@@ -462,11 +465,12 @@ final class KeyboardViewController: UIInputViewController {
 
     private func updateShiftFromContext() {
         guard config.autoCapital, shift != .caps else { return }
-        let before = (textDocumentProxy.documentContextBeforeInput ?? "")
-            .trimmingCharacters(in: .whitespaces)
-        let newShift: ShiftState =
-            (before.isEmpty || before.hasSuffix(".") || before.hasSuffix("!") || before.hasSuffix("?"))
-            ? .on : (shift == .caps ? .caps : .off)
+        let raw = textDocumentProxy.documentContextBeforeInput ?? ""
+        let before = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shouldCapitalize = before.isEmpty
+            || before.hasSuffix(".") || before.hasSuffix("!") || before.hasSuffix("?")
+            || before.hasSuffix("\n")
+        let newShift: ShiftState = shouldCapitalize ? .on : .off
         if newShift != shift { shift = newShift; updateKeyCaps() }
     }
 
