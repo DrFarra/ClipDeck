@@ -257,6 +257,10 @@ final class KeyboardViewController: UIInputViewController {
         keyboardArea.frame = CGRect(x: 0, y: areaY, width: W, height: areaH)
         panelHost?.view.frame = keyboardArea.frame
         emojiPanel?.frame = keyboardArea.frame
+        if trackpadActive {
+            trackpadOverlay.frame = keyboardArea.frame
+            trackpadHint?.frame = trackpadOverlay.bounds
+        }
 
         // Distribuye las filas para rellenar la altura disponible.
         let rowCount = CGFloat(keyViews.count)
@@ -325,6 +329,10 @@ final class KeyboardViewController: UIInputViewController {
 
     // MARK: Acciones de tecla
 
+    /// Corrector compartido: instanciar UITextChecker es caro y antes se creaba
+    /// uno nuevo en cada autocorrección y en cada cálculo de sugerencias.
+    static let sharedChecker = UITextChecker()
+
     /// Timer que sí dispara mientras hay un dedo apoyado (modo .common).
     static func commonTimer(_ interval: TimeInterval, _ block: @escaping () -> Void) -> Timer {
         let t = Timer(timeInterval: interval, repeats: false) { _ in block() }
@@ -372,6 +380,15 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private var deleteRepeats = 0
+
+    // MARK: Modo trackpad (como iOS: mantener espacio → todo el teclado)
+    private var trackpadActive = false
+    private var trackpadLastPoint: CGPoint = .zero
+    private var trackpadAccumX: CGFloat = 0
+    private var trackpadAccumY: CGFloat = 0
+    private var trackpadMoved = false
+    private let trackpadOverlay = UIView()
+    private var trackpadHint: UILabel?
 
     func backspaceDown() {
         keyFeedback()
@@ -443,6 +460,131 @@ final class KeyboardViewController: UIInputViewController {
         textDocumentProxy.adjustTextPosition(byCharacterOffset: offset)
     }
 
+    // MARK: - Trackpad
+
+    var isTrackpadActive: Bool { trackpadActive }
+
+    /// Entra en modo trackpad: las teclas se apagan y toda el área del teclado
+    /// pasa a mover el cursor, igual que al mantener el espacio en iOS.
+    func enterTrackpad(at point: CGPoint) {
+        guard config.trackpad, !trackpadActive else { return }
+        trackpadActive = true
+        trackpadMoved = false
+        trackpadLastPoint = point
+        trackpadAccumX = 0
+        trackpadAccumY = 0
+
+        if config.haptics {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        }
+
+        // Atenúa las teclas (efecto "se apagan las letras").
+        keyViews.forEach { $0.setDimmed(true) }
+
+        trackpadOverlay.frame = keyboardArea.frame
+        trackpadOverlay.backgroundColor = UIColor.systemGray4.withAlphaComponent(0.25)
+        trackpadOverlay.isUserInteractionEnabled = false
+        if trackpadOverlay.superview == nil { root.addSubview(trackpadOverlay) }
+        trackpadOverlay.isHidden = false
+        root.bringSubviewToFront(trackpadOverlay)
+
+        if trackpadHint == nil {
+            let l = UILabel()
+            l.text = "Mueve el cursor"
+            l.font = .systemFont(ofSize: 14, weight: .medium)
+            l.textColor = .secondaryLabel
+            l.textAlignment = .center
+            trackpadOverlay.addSubview(l)
+            trackpadHint = l
+        }
+        trackpadHint?.frame = trackpadOverlay.bounds
+        trackpadHint?.isHidden = false
+    }
+
+    /// Mueve el cursor a partir del desplazamiento del dedo en cualquier punto
+    /// del teclado. Horizontal = caracteres; vertical = línea aproximada.
+    func trackpadMove(to point: CGPoint) {
+        guard trackpadActive else { return }
+        let dx = point.x - trackpadLastPoint.x
+        let dy = point.y - trackpadLastPoint.y
+        trackpadLastPoint = point
+
+        // Horizontal: 1 carácter cada ~7 pt (preciso y estable).
+        trackpadAccumX += dx
+        let stepX: CGFloat = 7
+        if abs(trackpadAccumX) >= stepX {
+            let chars = Int(trackpadAccumX / stepX)
+            trackpadAccumX -= CGFloat(chars) * stepX
+            if chars != 0 {
+                textDocumentProxy.adjustTextPosition(byCharacterOffset: chars)
+                trackpadMoved = true
+                trackpadHint?.isHidden = true
+            }
+        }
+
+        // Vertical: cada ~22 pt salta una línea.
+        trackpadAccumY += dy
+        let stepY: CGFloat = 22
+        if abs(trackpadAccumY) >= stepY {
+            let lines = Int(trackpadAccumY / stepY)
+            trackpadAccumY -= CGFloat(lines) * stepY
+            if lines != 0 {
+                moveByLines(lines)
+                trackpadMoved = true
+                trackpadHint?.isHidden = true
+            }
+        }
+    }
+
+    func exitTrackpad() {
+        guard trackpadActive else { return }
+        trackpadActive = false
+        keyViews.forEach { $0.setDimmed(false) }
+        trackpadOverlay.isHidden = true
+        trackpadHint?.isHidden = true
+        scheduleSuggestions()
+    }
+
+    /// ¿Se llegó a mover el cursor? (para no insertar un espacio al salir)
+    var trackpadDidMove: Bool { trackpadMoved }
+
+    /// Movimiento vertical aproximado.
+    ///
+    /// Una extensión de teclado sólo puede desplazar el cursor por offset de
+    /// caracteres (`adjustTextPosition`), no existe API para "línea arriba".
+    /// Si hay saltos de línea reales se usan como referencia; si el texto va
+    /// envuelto, se estima con un ancho de línea típico.
+    private func moveByLines(_ lines: Int) {
+        guard lines != 0 else { return }
+        let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        let after = textDocumentProxy.documentContextAfterInput ?? ""
+        let fallbackLineLength = 38
+
+        if lines < 0 {
+            for _ in 0..<(-lines) {
+                if let idx = before.lastIndex(of: "\n") {
+                    let distance = before.distance(from: idx, to: before.endIndex)
+                    textDocumentProxy.adjustTextPosition(byCharacterOffset: -distance)
+                } else {
+                    let step = min(fallbackLineLength, before.count)
+                    if step > 0 { textDocumentProxy.adjustTextPosition(byCharacterOffset: -step) }
+                    break
+                }
+            }
+        } else {
+            for _ in 0..<lines {
+                if let idx = after.firstIndex(of: "\n") {
+                    let distance = after.distance(from: after.startIndex, to: idx) + 1
+                    textDocumentProxy.adjustTextPosition(byCharacterOffset: distance)
+                } else {
+                    let step = min(fallbackLineLength, after.count)
+                    if step > 0 { textDocumentProxy.adjustTextPosition(byCharacterOffset: step) }
+                    break
+                }
+            }
+        }
+    }
+
     func returnTap() { commit("\n") }
     func punctTap(_ ch: String) { commit(ch) }
 
@@ -452,31 +594,58 @@ final class KeyboardViewController: UIInputViewController {
         let word = currentWord()
         pendingRevert = nil
 
-        if !word.isEmpty {
-            var finalWord = word
-            if config.autocorrect, let fix = autocorrection(for: word) {
-                replaceCurrentWord(with: fix)
-                pendingRevert = word
-                finalWord = fix
-            }
-            if config.learnWords {
-                WordLearner.learn(finalWord)
-                if !lastCommittedWord.isEmpty {
-                    WordLearner.learnBigram(previous: lastCommittedWord, next: finalWord)
-                }
-            }
-            lastCommittedWord = finalWord
-        }
-
+        // El separador se inserta de inmediato: la escritura nunca espera al
+        // corrector ni al aprendizaje.
         textDocumentProxy.insertText(separator)
 
         let sentenceEnders: Set<String> = [".", "?", "!", "\n"]
         if sentenceEnders.contains(separator) {
             if config.autoCapital { shift = .on; updateKeyCaps() }
-            lastCommittedWord = ""
         } else {
             updateShiftFromContext()
         }
+
+        if !word.isEmpty {
+            let previous = lastCommittedWord
+            lastCommittedWord = word
+            let doCorrect = config.autocorrect
+            let doLearn = config.learnWords
+
+            // Corrector y aprendizaje en segundo plano; sólo el reemplazo del
+            // texto vuelve al hilo principal, y sólo si hace falta.
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let fix = doCorrect ? KeyboardViewController.autocorrection(for: word) : nil
+                let finalWord = fix ?? word
+                if doLearn {
+                    WordLearner.learn(finalWord)
+                    if !previous.isEmpty {
+                        WordLearner.learnBigram(previous: previous, next: finalWord)
+                    }
+                }
+                guard let fix else { return }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.applyCorrection(original: word, fixed: fix, separator: separator)
+                }
+            }
+        } else if sentenceEnders.contains(separator) {
+            lastCommittedWord = ""
+        }
+
+        scheduleSuggestions()
+    }
+
+    /// Sustituye la palabra ya escrita por su corrección, respetando el
+    /// separador que el usuario tecleó y sin pisar lo que haya escrito después.
+    private func applyCorrection(original: String, fixed: String, separator: String) {
+        let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        // Sólo corrige si el texto sigue tal cual lo dejamos (usuario no siguió
+        // escribiendo ni movió el cursor).
+        guard before.hasSuffix(original + separator) else { return }
+        for _ in 0..<(original.count + separator.count) { textDocumentProxy.deleteBackward() }
+        textDocumentProxy.insertText(fixed + separator)
+        pendingRevert = original
+        lastCommittedWord = fixed
         scheduleSuggestions()
     }
 
@@ -495,7 +664,7 @@ final class KeyboardViewController: UIInputViewController {
 
     private func precomputeChecker() {
         DispatchQueue.global(qos: .userInitiated).async {
-            let c = UITextChecker()
+            let c = KeyboardViewController.sharedChecker
             _ = c.completions(forPartialWordRange: NSRange(location: 0, length: 2),
                               in: "ho", language: "es_ES")
             _ = c.completions(forPartialWordRange: NSRange(location: 0, length: 2),
@@ -541,7 +710,7 @@ final class KeyboardViewController: UIInputViewController {
             results.append(entry)
             if results.count >= 4 { break }
         }
-        let checker = UITextChecker()
+        let checker = KeyboardViewController.sharedChecker
         let range = NSRange(location: 0, length: word.utf16.count)
         for language in ["es_ES", "en_US"] {
             if let c = checker.completions(forPartialWordRange: range, in: word, language: language) {
@@ -681,12 +850,12 @@ final class KeyboardViewController: UIInputViewController {
         scheduleSuggestions()
     }
 
-    private func autocorrection(for word: String) -> String? {
+    private static func autocorrection(for word: String) -> String? {
         guard word.count >= 3, word.count <= 20,
               word.rangeOfCharacter(from: .decimalDigits) == nil,
               word != word.uppercased(),
               !WordLearner.isKnown(word) else { return nil }
-        let checker = UITextChecker()
+        let checker = KeyboardViewController.sharedChecker
         let range = NSRange(location: 0, length: word.utf16.count)
         for language in ["es_ES", "en_US"] {
             let m = checker.rangeOfMisspelledWord(in: word, range: range,
@@ -781,6 +950,10 @@ final class KeyboardViewController: UIInputViewController {
         }
         emojiPanel?.isHidden = false
         emojiPanel?.frame = keyboardArea.frame
+        if trackpadActive {
+            trackpadOverlay.frame = keyboardArea.frame
+            trackpadHint?.frame = trackpadOverlay.bounds
+        }
         emojiPanel?.reloadCurrent()
         if let ep = emojiPanel { root.bringSubviewToFront(ep) }
     }
@@ -812,6 +985,10 @@ final class KeyboardViewController: UIInputViewController {
         panelHost?.view.isHidden = false
         panelHost?.view.frame = keyboardArea.frame
         emojiPanel?.frame = keyboardArea.frame
+        if trackpadActive {
+            trackpadOverlay.frame = keyboardArea.frame
+            trackpadHint?.frame = trackpadOverlay.bounds
+        }
         if let hv = panelHost?.view { root.bringSubviewToFront(hv) }
     }
 
@@ -881,6 +1058,10 @@ final class KeyRowView: UIView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    func setDimmed(_ dimmed: Bool) {
+        for k in keys { k.setDimmed(dimmed) }
+    }
+
     func applyShift(_ upper: Bool, caps: Bool) {
         for k in keys {
             k.applyShift(upper)
@@ -921,6 +1102,7 @@ final class KeyView: UIView {
     private var spaceTracking = false
     private var spaceStartX: CGFloat = 0
     private var spaceConsumed = 0
+    private var trackpadTimer: Timer?
 
     init(spec: KeySpec, controller: KeyboardViewController) {
         self.spec = spec
@@ -966,6 +1148,12 @@ final class KeyView: UIView {
         if spec.kind == .char, baseValue.rangeOfCharacter(from: .letters) != nil {
             label.text = up ? baseValue.uppercased() : baseValue
         }
+    }
+
+    /// Atenúa la tecla mientras el teclado actúa como trackpad.
+    func setDimmed(_ dimmed: Bool) {
+        label.alpha = dimmed ? 0.15 : 1
+        alpha = dimmed ? 0.5 : 1
     }
 
     /// Resalta la tecla de mayúsculas según el estado actual.
@@ -1022,12 +1210,31 @@ final class KeyView: UIView {
                 spaceStartX = t.location(in: superview).x
                 spaceTracking = false
                 spaceConsumed = 0
+                // Mantener pulsado el espacio → todo el teclado es trackpad,
+                // igual que en el teclado nativo de iOS.
+                if controller?.trackpadEnabled == true, let root = controller?.view {
+                    let p = t.location(in: root)
+                    trackpadTimer?.invalidate()
+                    trackpadTimer = KeyboardViewController.commonTimer(0.35) { [weak self] in
+                        guard let self, self.isDown else { return }
+                        self.controller?.enterTrackpad(at: p)
+                    }
+                }
             }
         }
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let t = touches.first else { return }
+
+        // Modo trackpad activo: el dedo mueve el cursor esté donde esté.
+        if controller?.isTrackpadActive == true {
+            if let root = controller?.view {
+                controller?.trackpadMove(to: t.location(in: root))
+            }
+            return
+        }
+
         if accentBar != nil {
             let p = t.location(in: self)
             let slot = Int((p.x + 20) / 34)
@@ -1038,7 +1245,10 @@ final class KeyView: UIView {
         if spec.kind == .space, let controller, controller.trackpadEnabled {
             let x = t.location(in: superview).x
             let dx = x - spaceStartX
-            if !spaceTracking && abs(dx) > 16 { spaceTracking = true }
+            if !spaceTracking && abs(dx) > 16 {
+                spaceTracking = true
+                trackpadTimer?.invalidate(); trackpadTimer = nil
+            }
             if spaceTracking {
                 let steps = Int(dx / 9)
                 let delta = steps - spaceConsumed
@@ -1060,6 +1270,20 @@ final class KeyView: UIView {
     private func finishTouch(cancelled: Bool) {
         isDown = false
         longTimer?.invalidate(); longTimer = nil
+        trackpadTimer?.invalidate(); trackpadTimer = nil
+
+        // Si estábamos en modo trackpad, salir y no escribir nada.
+        if controller?.isTrackpadActive == true {
+            let moved = controller?.trackpadDidMove ?? false
+            controller?.exitTrackpad()
+            setPressed(false)
+            controller?.hidePopup()
+            spaceTracking = false
+            if !moved && !cancelled && spec.kind == .space {
+                controller?.spaceTap()      // mantuvo pulsado sin mover: espacio normal
+            }
+            return
+        }
 
         // Si el toque fue muy corto, deja ver el resaltado un instante.
         let elapsed = CACurrentMediaTime() - pressStart
