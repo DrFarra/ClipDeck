@@ -46,7 +46,9 @@ final class KeyboardViewController: UIInputViewController {
     private let topBar = UIView()
     private let clipboardButton = UIButton(type: .system)
     private let emojiButton = UIButton(type: .system)
-    private var suggestionButtons: [UIButton] = []
+    private var suggestionButtons: [SuggestionButton] = []
+    private var confirmOverlay: UIView?
+    private var confirmWord: String?
     private var separatorViews: [UIView] = []
     private let keyboardArea = UIView()
     private var keyViews: [KeyRowView] = []
@@ -133,17 +135,9 @@ final class KeyboardViewController: UIInputViewController {
         topBar.addSubview(emojiButton)
 
         for i in 0..<3 {
-            let b = UIButton(type: .system)
-            b.titleLabel?.font = .systemFont(ofSize: 17)
-            b.titleLabel?.adjustsFontSizeToFitWidth = true
-            b.titleLabel?.minimumScaleFactor = 0.7
-            b.titleLabel?.lineBreakMode = .byTruncatingTail
-            b.setTitleColor(.label, for: .normal)
-            b.tag = i
-            b.addTarget(self, action: #selector(tapSuggestion(_:)), for: .touchUpInside)
-            let lp = UILongPressGestureRecognizer(target: self, action: #selector(longPressSuggestion(_:)))
-            lp.minimumPressDuration = 0.4
-            b.addGestureRecognizer(lp)
+            let b = SuggestionButton()
+            b.onTap = { [weak self] word in self?.applySuggestionWord(word) }
+            b.onLongPress = { [weak self] word in self?.confirmForget(word) }
             topBar.addSubview(b)
             suggestionButtons.append(b)
             if i > 0 {
@@ -488,14 +482,7 @@ final class KeyboardViewController: UIInputViewController {
                                            lastWord: String, capitalizeNext: Bool) -> [String] {
         let word = wordBefore(before)
         if word.isEmpty || word.count < 2 || word.rangeOfCharacter(from: .letters) == nil {
-            var r: [String] = []
-            if !lastWord.isEmpty { r += WordLearner.successors(of: lastWord) }
-            let blocked = WordLearner.blockedWords()
-            for w in KbData.commonWords {
-                if r.count >= 3 { break }
-                if !r.contains(w) && !blocked.contains(w) { r.append(w) }
-            }
-            return Array(r.prefix(3)).map { capitalizeNext ? $0.prefix(1).uppercased() + $0.dropFirst() : $0 }
+            return nextWords(lastWord: lastWord, capitalizeNext: capitalizeNext)
         }
 
         let lower = word.lowercased()
@@ -523,7 +510,23 @@ final class KeyboardViewController: UIInputViewController {
             unique.append(capitalize ? cand.prefix(1).uppercased() + cand.dropFirst() : cand)
             if unique.count == 3 { break }
         }
+        // Si la palabra en curso no tiene completados (p. ej. "xd"), proponemos
+        // igualmente la próxima palabra probable en vez de dejar la barra vacía.
+        if unique.isEmpty {
+            return nextWords(lastWord: word, capitalizeNext: capitalizeNext)
+        }
         return unique
+    }
+
+    private static func nextWords(lastWord: String, capitalizeNext: Bool) -> [String] {
+        var r: [String] = []
+        if !lastWord.isEmpty { r += WordLearner.successors(of: lastWord) }
+        let blocked = WordLearner.blockedWords()
+        for w in KbData.commonWords {
+            if r.count >= 3 { break }
+            if !r.contains(w) && !blocked.contains(w) { r.append(w) }
+        }
+        return Array(r.prefix(3)).map { capitalizeNext ? $0.prefix(1).uppercased() + $0.dropFirst() : $0 }
     }
 
     private func setSuggestions(_ words: [String], revert: String? = nil) {
@@ -533,32 +536,14 @@ final class KeyboardViewController: UIInputViewController {
             titles = ["↺ " + showRevert] + Array(words.prefix(2))
         }
         for (i, b) in suggestionButtons.enumerated() {
-            if i < titles.count {
-                b.setTitle(titles[i], for: .normal)
-                b.isHidden = false
-            } else {
-                b.setTitle(nil, for: .normal)
-                b.isHidden = true
-            }
+            b.text = i < titles.count ? titles[i] : ""
         }
         for (i, sep) in separatorViews.enumerated() {
             sep.isHidden = (i + 1) >= titles.count
         }
     }
 
-    @objc private func longPressSuggestion(_ gr: UILongPressGestureRecognizer) {
-        guard gr.state == .began, let b = gr.view as? UIButton,
-              var word = b.title(for: .normal), !word.isEmpty else { return }
-        if word.hasPrefix("↺ ") { word = String(word.dropFirst(2)) }
-        keyFeedback()
-        WordLearner.forget(word)
-        // Aviso breve y recálculo
-        showHint("«\(word)» ya no se sugerirá")
-        scheduleSuggestions()
-    }
-
-    @objc private func tapSuggestion(_ sender: UIButton) {
-        guard let title = sender.title(for: .normal) else { return }
+    private func applySuggestionWord(_ title: String) {
         keyFeedback()
         if title.hasPrefix("↺ ") {
             undoCorrection(to: String(title.dropFirst(2)))
@@ -576,6 +561,76 @@ final class KeyboardViewController: UIInputViewController {
         lastCommittedWord = title
         pendingRevert = nil
         updateShiftFromContext()
+        scheduleSuggestions()
+    }
+
+    private func confirmForget(_ title: String) {
+        var word = title
+        if word.hasPrefix("↺ ") { word = String(word.dropFirst(2)) }
+        guard !word.isEmpty else { return }
+        keyFeedback()
+        showForgetConfirm(word: word)
+    }
+
+    // MARK: Confirmación para olvidar una sugerencia (sin UIAlertController, no
+    // disponible en teclados: se dibuja dentro del propio teclado).
+
+    private func showForgetConfirm(word: String) {
+        dismissConfirm()
+        confirmWord = word
+
+        let dim = UIView(frame: root.bounds)
+        dim.backgroundColor = UIColor.black.withAlphaComponent(0.35)
+        dim.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        dim.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(dismissConfirm)))
+        root.addSubview(dim)
+
+        let cardW = min(root.bounds.width - 48, 320)
+        let cardH: CGFloat = 130
+        let card = UIView(frame: CGRect(x: (root.bounds.width - cardW) / 2,
+                                        y: (root.bounds.height - cardH) / 2,
+                                        width: cardW, height: cardH))
+        card.backgroundColor = .secondarySystemBackground
+        card.layer.cornerRadius = 14
+        dim.addSubview(card)
+
+        let label = UILabel(frame: CGRect(x: 14, y: 14, width: cardW - 28, height: 56))
+        label.numberOfLines = 2
+        label.textAlignment = .center
+        label.font = .systemFont(ofSize: 15)
+        label.text = "¿Olvidar «\(word)»?\nNo se volverá a sugerir."
+        card.addSubview(label)
+
+        let cancel = UIButton(type: .system)
+        cancel.setTitle("Cancelar", for: .normal)
+        cancel.titleLabel?.font = .systemFont(ofSize: 16)
+        cancel.frame = CGRect(x: 10, y: cardH - 46, width: cardW / 2 - 15, height: 38)
+        cancel.addTarget(self, action: #selector(dismissConfirm), for: .touchUpInside)
+        card.addSubview(cancel)
+
+        let confirm = UIButton(type: .system)
+        confirm.setTitle("Olvidar", for: .normal)
+        confirm.setTitleColor(.systemRed, for: .normal)
+        confirm.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
+        confirm.frame = CGRect(x: cardW / 2 + 5, y: cardH - 46, width: cardW / 2 - 15, height: 38)
+        confirm.addTarget(self, action: #selector(confirmForgetAction), for: .touchUpInside)
+        card.addSubview(confirm)
+
+        confirmOverlay = dim
+    }
+
+    @objc private func dismissConfirm() {
+        confirmOverlay?.removeFromSuperview()
+        confirmOverlay = nil
+        confirmWord = nil
+    }
+
+    @objc private func confirmForgetAction() {
+        if let w = confirmWord {
+            WordLearner.forget(w)
+            showHint("«\(w)» ya no se sugerirá")
+        }
+        dismissConfirm()
         scheduleSuggestions()
     }
 
@@ -668,7 +723,7 @@ final class KeyboardViewController: UIInputViewController {
     private func showKeyboard() {
         panelHost?.view.isHidden = true
         keyboardArea.isHidden = false
-        suggestionButtons.forEach { $0.isHidden = ($0.title(for: .normal) == nil) }
+        suggestionButtons.forEach { $0.isHidden = $0.text.isEmpty }
         separatorViews.forEach { $0.isHidden = false }
         scheduleSuggestions()
     }
@@ -1151,5 +1206,70 @@ struct EmojiPanel: View {
                         in: RoundedRectangle(cornerRadius: 7))
             .contentShape(Rectangle())
             .onTapGesture { categoryIndex = index }
+    }
+}
+
+// MARK: - Botón de sugerencia (toque propio, fiable en teclados)
+
+final class SuggestionButton: UIView {
+    var text: String = "" {
+        didSet {
+            label.text = text
+            isHidden = text.isEmpty
+        }
+    }
+    var onTap: ((String) -> Void)?
+    var onLongPress: ((String) -> Void)?
+
+    private let label = UILabel()
+    private var longTimer: Timer?
+    private var didLong = false
+    private var isDown = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        label.textAlignment = .center
+        label.font = .systemFont(ofSize: 17)
+        label.textColor = .label
+        label.adjustsFontSizeToFitWidth = true
+        label.minimumScaleFactor = 0.7
+        label.lineBreakMode = .byTruncatingTail
+        addSubview(label)
+        layer.cornerRadius = 6
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        label.frame = bounds
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard !text.isEmpty else { return }
+        isDown = true
+        didLong = false
+        backgroundColor = UIColor.systemGray4
+        longTimer?.invalidate()
+        longTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
+            guard let self, self.isDown else { return }
+            self.didLong = true
+            self.backgroundColor = .clear
+            self.onLongPress?(self.text)
+        }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        finish(tap: !didLong)
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        finish(tap: false)
+    }
+
+    private func finish(tap: Bool) {
+        isDown = false
+        longTimer?.invalidate(); longTimer = nil
+        backgroundColor = .clear
+        if tap && !didLong && !text.isEmpty { onTap?(text) }
+        didLong = false
     }
 }
