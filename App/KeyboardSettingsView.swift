@@ -7,6 +7,8 @@ struct KeyboardSettingsView: View {
     @State private var learnedCount = WordLearner.learnedCount
     @State private var showClearConfirm = false
 
+    private let punctuationOptions = [",", ".", "?", "!", ":", ";", "-", "'", "@"]
+
     var body: some View {
         Form {
             Section("Diseño") {
@@ -24,6 +26,17 @@ struct KeyboardSettingsView: View {
                 }
                 Toggle("Fila de números", isOn: $config.numberRow)
                 Toggle("Globo al pulsar tecla", isOn: $config.keyPopup)
+            }
+
+            Section("Teclas de puntuación") {
+                Picker("Tecla izquierda (junto al espacio)", selection: $config.punctLeft) {
+                    ForEach(punctuationOptions, id: \.self) { Text($0).tag($0) }
+                }
+                Picker("Tecla derecha (junto al espacio)", selection: $config.punctRight) {
+                    ForEach(punctuationOptions, id: \.self) { Text($0).tag($0) }
+                }
+                Text("Por defecto son «,» y «.». Puedes cambiar la derecha por «?» u otro signo.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section("Escritura") {
@@ -73,6 +86,8 @@ struct KeyboardSettingsView: View {
         .onChange(of: config.trackpad) { save() }
         .onChange(of: config.haptics) { save() }
         .onChange(of: config.sound) { save() }
+        .onChange(of: config.punctLeft) { save() }
+        .onChange(of: config.punctRight) { save() }
         .confirmationDialog("¿Borrar el vocabulario aprendido?",
                             isPresented: $showClearConfirm, titleVisibility: .visible) {
             Button("Borrar", role: .destructive) {
@@ -98,5 +113,7 @@ struct KeyboardSettingsView: View {
         store.set(config.trackpad, forKey: KbPrefs.spaceTrackpad)
         store.set(config.haptics, forKey: KbPrefs.haptics)
         store.set(config.sound, forKey: KbPrefs.sound)
+        store.set(config.punctLeft, forKey: KbPrefs.punctLeft)
+        store.set(config.punctRight, forKey: KbPrefs.punctRight)
     }
 }
