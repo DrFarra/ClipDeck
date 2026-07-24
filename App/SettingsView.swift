@@ -1,9 +1,11 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.openURL) private var openURL
 
     @AppStorage(SettingsKeys.appearance) private var appearance = "system"
     @AppStorage(SettingsKeys.retentionDays) private var retentionDays = 0
@@ -69,6 +71,13 @@ struct SettingsView: View {
                 }
 
                 Section("Teclado y extensiones") {
+                    Button {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            openURL(url)
+                        }
+                    } label: {
+                        Label("Abrir Ajustes de ClipDeck en iOS", systemImage: "gear")
+                    }
                     DisclosureGroup("Cómo activar el teclado") {
                         Text("""
                         1. Abre Ajustes → General → Teclado → Teclados
