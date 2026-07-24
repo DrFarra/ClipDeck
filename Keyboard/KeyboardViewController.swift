@@ -288,6 +288,36 @@ final class KeyboardViewController: UIInputViewController {
 
     func hidePopup() { popup.isHidden = true }
 
+    private lazy var hintLabel: UILabel = {
+        let l = UILabel()
+        l.font = .systemFont(ofSize: 13, weight: .medium)
+        l.textAlignment = .center
+        l.textColor = .label
+        l.backgroundColor = UIColor.systemGray4
+        l.layer.cornerRadius = 12
+        l.layer.masksToBounds = true
+        l.numberOfLines = 1
+        l.isHidden = true
+        l.isUserInteractionEnabled = false
+        return l
+    }()
+
+    /// Aviso breve centrado (p. ej. al olvidar una sugerencia).
+    func showHint(_ text: String) {
+        if hintLabel.superview == nil { root.addSubview(hintLabel) }
+        hintLabel.text = "  \(text)  "
+        hintLabel.sizeToFit()
+        let w = hintLabel.bounds.width + 16
+        let h: CGFloat = 30
+        hintLabel.frame = CGRect(x: (root.bounds.width - w) / 2, y: 44, width: w, height: h)
+        hintLabel.isHidden = false
+        root.bringSubviewToFront(hintLabel)
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(hideHint), object: nil)
+        perform(#selector(hideHint), with: nil, afterDelay: 1.6)
+    }
+
+    @objc private func hideHint() { hintLabel.isHidden = true }
+
     // MARK: Acciones de tecla
 
     func keyFeedback() {
