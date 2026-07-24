@@ -107,6 +107,9 @@ struct KeyboardRootView: View {
     @State private var lastCommittedWord = ""
     @State private var hint: String?
     @State private var lastSpaceTap: Date = .distantPast
+    @State private var lastShiftTap: Date = .distantPast
+    @State private var shiftPressed = false
+    @State private var suggestionGeneration = 0
     @State private var deleteTimer: Timer?
 
     private let keyColor = Color(.secondarySystemBackground)
@@ -134,6 +137,14 @@ struct KeyboardRootView: View {
             bridge.config = config
             captureAndLoad()
             updateShiftFromContext()
+            // Precalienta el corrector: la primera sugerencia no congela la UI.
+            DispatchQueue.main.async {
+                let checker = UITextChecker()
+                _ = checker.completions(forPartialWordRange: NSRange(location: 0, length: 2),
+                                        in: "ho", language: "es_ES")
+                _ = checker.completions(forPartialWordRange: NSRange(location: 0, length: 2),
+                                        in: "he", language: "en_US")
+            }
         }
         .overlay {
             if let hint {
@@ -150,10 +161,11 @@ struct KeyboardRootView: View {
 
     private var toolbar: some View {
         HStack(spacing: 6) {
-            Button {
+            TouchDownButton(action: {
+                bridge.keyFeedback()
                 if panel == .clipboard { panel = .keys }
                 else { panel = .clipboard; captureAndLoad() }
-            } label: {
+            }) {
                 Image(systemName: panel == .clipboard ? "keyboard" : "doc.on.clipboard")
                     .font(.body.weight(.medium))
                     .frame(width: 44, height: 34)
@@ -161,13 +173,13 @@ struct KeyboardRootView: View {
                                 in: RoundedRectangle(cornerRadius: 8))
                     .foregroundStyle(panel == .clipboard ? Color.accentColor : Color.primary)
             }
-            .buttonStyle(.plain)
 
             suggestionBar
 
-            Button {
+            TouchDownButton(action: {
+                bridge.keyFeedback()
                 panel = panel == .emoji ? .keys : .emoji
-            } label: {
+            }) {
                 Image(systemName: panel == .emoji ? "keyboard" : "face.smiling")
                     .font(.body.weight(.medium))
                     .frame(width: 44, height: 34)
@@ -175,7 +187,6 @@ struct KeyboardRootView: View {
                                 in: RoundedRectangle(cornerRadius: 8))
                     .foregroundStyle(panel == .emoji ? Color.accentColor : Color.primary)
             }
-            .buttonStyle(.plain)
         }
         .frame(height: 36)
     }
@@ -237,60 +248,64 @@ struct KeyboardRootView: View {
     private var thirdRowSymbols: [String] { ["=","<",">","{","}","[","]"] }
 
     private var keysArea: some View {
-        VStack(spacing: 7) {
-            if config.numberRow {
-                HStack(spacing: 4) {
-                    ForEach(numberRow, id: \.self) { charKey($0, small: true) }
-                }
-            }
+        GeometryReader { geo in
+            let rowCount: CGFloat = config.numberRow ? 5 : 4
+            let spacing: CGFloat = 6
+            let rowH = min(max((geo.size.height - spacing * (rowCount - 1) - 4) / rowCount, 36), 64)
 
-            ForEach(0..<2, id: \.self) { index in
-                HStack(spacing: 4) {
-                    ForEach((symbolsMode ? symbolRows : letterRows)[index], id: \.self) { key in
-                        charKey(key)
+            VStack(spacing: spacing) {
+                if config.numberRow {
+                    HStack(spacing: 4) {
+                        ForEach(numberRow, id: \.self) { charKey($0, height: rowH) }
                     }
                 }
-            }
 
-            HStack(spacing: 4) {
-                if symbolsMode {
-                    ForEach(thirdRowSymbols, id: \.self) { charKey($0) }
-                } else {
-                    shiftKey
-                    ForEach(thirdRowLetters, id: \.self) { charKey($0) }
-                }
-                backspaceKey
-            }
-
-            HStack(spacing: 4) {
-                utilKey(width: 46, height: keyH) { symbolsMode.toggle() } label: {
-                    Text(symbolsMode ? "ABC" : "123").font(.subheadline)
-                }
-                if bridge.needsSwitchKey {
-                    utilKey(width: 40, height: keyH) { bridge.nextKeyboard() } label: {
-                        Image(systemName: "globe").font(.body)
+                ForEach(0..<2, id: \.self) { index in
+                    HStack(spacing: 4) {
+                        ForEach((symbolsMode ? symbolRows : letterRows)[index], id: \.self) { key in
+                            charKey(key, height: rowH)
+                        }
                     }
                 }
-                utilKey(width: 36, height: keyH) { commitSeparator(",") } label: {
-                    Text(",").font(.system(size: 20))
+
+                HStack(spacing: 4) {
+                    if symbolsMode {
+                        ForEach(thirdRowSymbols, id: \.self) { charKey($0, height: rowH) }
+                    } else {
+                        shiftKey(height: rowH)
+                        ForEach(thirdRowLetters, id: \.self) { charKey($0, height: rowH) }
+                    }
+                    backspaceKey(height: rowH)
                 }
-                SpaceKeyView(height: keyH,
-                             trackpadEnabled: config.trackpad,
-                             normal: keyColor, pressed: keyPressColor,
-                             feedback: { bridge.keyFeedback() },
-                             moveCursor: { bridge.adjustCursor($0) },
-                             onSpace: { handleSpace() })
-                utilKey(width: 36, height: keyH) { commitSeparator(".") } label: {
-                    Text(".").font(.system(size: 20))
-                }
-                utilKey(width: 56, height: keyH) { commitSeparator("\n") } label: {
-                    Image(systemName: "return").font(.body)
+
+                HStack(spacing: 4) {
+                    utilKey(width: 46, height: rowH) { symbolsMode.toggle() } label: {
+                        Text(symbolsMode ? "ABC" : "123").font(.subheadline)
+                    }
+                    if bridge.needsSwitchKey {
+                        utilKey(width: 40, height: rowH) { bridge.nextKeyboard() } label: {
+                            Image(systemName: "globe").font(.body)
+                        }
+                    }
+                    utilKey(width: 36, height: rowH) { commitSeparator(",") } label: {
+                        Text(",").font(.system(size: 20))
+                    }
+                    SpaceKeyView(height: rowH,
+                                 trackpadEnabled: config.trackpad,
+                                 normal: keyColor, pressed: keyPressColor,
+                                 feedback: { bridge.keyFeedback() },
+                                 moveCursor: { bridge.adjustCursor($0) },
+                                 onSpace: { handleSpace() })
+                    utilKey(width: 36, height: rowH) { commitSeparator(".") } label: {
+                        Text(".").font(.system(size: 20))
+                    }
+                    utilKey(width: 56, height: rowH) { commitSeparator("\n") } label: {
+                        Image(systemName: "return").font(.body)
+                    }
                 }
             }
         }
     }
-
-    private var keyH: CGFloat { CGFloat(config.keyHeight) }
 
     private func utilKey<L: View>(width: CGFloat, height: CGFloat,
                                   action: @escaping () -> Void,
@@ -301,7 +316,7 @@ struct KeyboardRootView: View {
                      content: label())
     }
 
-    private func charKey(_ key: String, small: Bool = false) -> some View {
+    private func charKey(_ key: String, height: CGFloat) -> some View {
         let shifted = shift != .off && !symbolsMode
         let display = shifted ? key.uppercased() : key
         let variants = config.accents ? (KbData.keyVariants[key] ?? []) : []
@@ -309,8 +324,8 @@ struct KeyboardRootView: View {
 
         return CharKeyView(display: display,
                            variants: shiftedVariants,
-                           height: small ? max(30, keyH - 8) : keyH,
-                           fontSize: small ? CGFloat(config.fontSize) - 4 : CGFloat(config.fontSize),
+                           height: height,
+                           fontSize: CGFloat(config.fontSize),
                            popupEnabled: config.keyPopup,
                            normal: keyColor,
                            pressed: keyPressColor,
@@ -327,23 +342,33 @@ struct KeyboardRootView: View {
                            })
     }
 
-    private var shiftKey: some View {
+    private func shiftKey(height: CGFloat) -> some View {
         let icon = shift == .caps ? "capslock.fill" : (shift == .on ? "shift.fill" : "shift")
         return Image(systemName: icon)
             .font(.body)
-            .frame(width: 40, height: keyH)
+            .frame(width: 40, height: height)
             .background(shift != .off ? Color(.systemGray3) : keyColor,
                         in: RoundedRectangle(cornerRadius: 7))
             .gesture(
-                ExclusiveGesture(
-                    TapGesture(count: 2).onEnded { bridge.keyFeedback(); shift = .caps },
-                    TapGesture().onEnded { bridge.keyFeedback(); shift = shift == .off ? .on : .off }
-                )
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        guard !shiftPressed else { return }
+                        shiftPressed = true
+                        bridge.keyFeedback()
+                        let now = Date()
+                        if now.timeIntervalSince(lastShiftTap) < 0.3 {
+                            shift = .caps
+                        } else {
+                            shift = shift == .off ? .on : .off
+                        }
+                        lastShiftTap = now
+                    }
+                    .onEnded { _ in shiftPressed = false }
             )
     }
 
-    private var backspaceKey: some View {
-        PressableKey(width: 40, height: keyH,
+    private func backspaceKey(height: CGFloat) -> some View {
+        PressableKey(width: 40, height: height,
                      normal: keyColor, pressed: keyPressColor,
                      onPress: {
                          bridge.keyFeedback()
@@ -489,6 +514,16 @@ struct KeyboardRootView: View {
 
     private func refreshSuggestions() {
         guard config.prediction else { return }
+        suggestionGeneration += 1
+        let generation = suggestionGeneration
+        // Se calcula tras despachar el toque para no retrasar la siguiente pulsación.
+        DispatchQueue.main.async {
+            guard generation == suggestionGeneration else { return }
+            computeSuggestions()
+        }
+    }
+
+    private func computeSuggestions() {
         let word = currentWord()
 
         if word.isEmpty {
@@ -1021,5 +1056,31 @@ struct EmojiPanel: View {
                             in: RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)
+    }
+}
+
+
+// MARK: - Botón que dispara al tocar (respuesta inmediata)
+
+struct TouchDownButton<Content: View>: View {
+    private let action: () -> Void
+    private let content: Content
+    @State private var down = false
+
+    init(action: @escaping () -> Void, @ViewBuilder content: () -> Content) {
+        self.action = action
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        if !down { down = true; action() }
+                    }
+                    .onEnded { _ in down = false }
+            )
     }
 }
