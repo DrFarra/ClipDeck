@@ -31,7 +31,7 @@ enum KbPrefs {
     }
 
     /// Configuración resuelta con valores por defecto.
-    struct Config {
+    struct Config: Equatable {
         var height: Double
         var keyHeight: Double
         var fontSize: Double
