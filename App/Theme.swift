@@ -13,6 +13,15 @@ extension Color {
         self.init(red: r, green: g, blue: b)
     }
 
+    /// Color adaptativo claro/oscuro.
+    init(light: String, dark: String) {
+        self.init(uiColor: UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(Color(hex: dark))
+                : UIColor(Color(hex: light))
+        })
+    }
+
     /// Luminancia aproximada para elegir texto claro u oscuro sobre este fondo.
     static func isLightHex(_ hex: String) -> Bool {
         var value: UInt64 = 0
@@ -27,15 +36,28 @@ extension Color {
 }
 
 enum Theme {
-    static let background = Color(hex: "#F3F3FA")
-    static let card = Color.white
-    static let textPrimary = Color(hex: "#111114")
-    static let textSecondary = Color(hex: "#71717A")
+    static let background = Color(light: "#F3F3FA", dark: "#151517")
+    static let card = Color(light: "#FFFFFF", dark: "#242429")
+    static let textPrimary = Color.primary
+    static let textSecondary = Color.secondary
+    static let accent = Color(hex: "#4E7CF6")
 
     static let pinboardColors = ["#F0453B", "#F5A623", "#38B44A", "#4E7CF6", "#8E5CF6", "#EC5CA8", "#F07830"]
 
     static let cardCornerRadius: CGFloat = 18
     static let capsuleCornerRadius: CGFloat = 24
+}
+
+/// Liquid Glass (iOS 26+) con degradado elegante a material en versiones anteriores.
+extension View {
+    @ViewBuilder
+    func liquidGlass<S: Shape>(in shape: S, interactive: Bool = true) -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+        } else {
+            self.background(.regularMaterial, in: shape)
+        }
+    }
 }
 
 enum Haptics {

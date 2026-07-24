@@ -36,6 +36,7 @@ struct ClipDeckApp: App {
                     LockScreenView { unlock() }
                 }
             }
+            .tint(Theme.accent)
             .preferredColorScheme(colorScheme)
             .onOpenURL { url in
                 pendingDeepLink = DeepLink(url: url)

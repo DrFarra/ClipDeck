@@ -61,7 +61,7 @@ struct HistoryView: View {
                         .font(.subheadline.weight(.medium))
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
-                        .background(.thinMaterial, in: Capsule())
+                        .liquidGlass(in: Capsule(), interactive: false)
                         .transition(.move(edge: .top).combined(with: .opacity))
                         .padding(.top, 4)
                 }
@@ -285,7 +285,7 @@ struct HistoryView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.title3)
                     .frame(width: 50, height: 50)
-                    .background(.regularMaterial, in: Circle())
+                    .liquidGlass(in: Circle())
             }
 
             Button { showSourcePicker = true } label: {
@@ -299,7 +299,7 @@ struct HistoryView: View {
                 }
                 .padding(.horizontal, 18)
                 .frame(height: 50)
-                .background(.regularMaterial, in: Capsule())
+                .liquidGlass(in: Capsule())
             }
 
             Menu {
@@ -316,7 +316,7 @@ struct HistoryView: View {
                 Image(systemName: "plus")
                     .font(.title3)
                     .frame(width: 50, height: 50)
-                    .background(.regularMaterial, in: Circle())
+                    .liquidGlass(in: Circle())
             }
         }
         .foregroundStyle(Theme.textPrimary)
@@ -350,7 +350,7 @@ struct HistoryView: View {
         .font(.title3)
         .frame(maxWidth: .infinity)
         .frame(height: 54)
-        .background(.regularMaterial, in: Capsule())
+        .liquidGlass(in: Capsule())
         .padding(.horizontal, 16)
         .padding(.bottom, 6)
         .disabled(selectedIDs.isEmpty)
