@@ -71,6 +71,7 @@ struct SettingsView: View {
                 }
 
                 Section("Teclado y extensiones") {
+                    NavigationLink("Configuración del teclado") { KeyboardSettingsView() }
                     Button {
                         if let url = URL(string: UIApplication.openSettingsURLString) {
                             openURL(url)
