@@ -55,6 +55,9 @@ struct ClipDeckApp: App {
                 let context = container.mainContext
                 CaptureService.captureIfNeeded(context: context)
                 CaptureService.purgeExpired(context: context)
+                // El vocabulario para escribir deslizando se arma una sola vez,
+                // en segundo plano, a partir del diccionario del sistema.
+                SwipeLexicon.buildIfNeeded()
             case .inactive:
                 isObscured = true
             case .background:

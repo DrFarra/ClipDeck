@@ -6,6 +6,10 @@ struct KeyboardSettingsView: View {
     @State private var config = KbPrefs.Config.load()
     @State private var learnedCount = WordLearner.learnedCount
     @State private var showClearConfirm = false
+    @State private var buildingDict = false
+    @State private var dictProgress = 0.0
+    @State private var dictCount = SwipeLexicon.builtCount
+    @State private var dictComplete = SwipeLexicon.isComplete
 
     private let punctuationOptions = [",", ".", "?", "!", ":", ";", "-", "'", "@"]
 
@@ -14,6 +18,8 @@ struct KeyboardSettingsView: View {
             designSection
             punctuationSection
             writingSection
+            swipeSection
+            trackpadSection
             feedbackSection
             learnedSection
             noteSection
@@ -63,7 +69,59 @@ struct KeyboardSettingsView: View {
             Toggle("Acentos con pulsación larga", isOn: $config.accents)
             Toggle("Doble espacio inserta punto", isOn: $config.doubleSpace)
             Toggle("Mayúsculas automáticas", isOn: $config.autoCapital)
+        }
+    }
+
+    @ViewBuilder private var swipeSection: some View {
+        Section("Escribir deslizando") {
+            Toggle("Escribir deslizando el dedo", isOn: $config.swipe)
+            LabeledContent("Diccionario", value: dictionaryStatus)
+            if buildingDict {
+                ProgressView(value: dictProgress)
+            } else {
+                Button(dictButtonTitle) { buildDictionary(restart: dictComplete) }
+            }
+            Text("Sin levantar el dedo, pasa por las letras de la palabra. El diccionario se arma en tu iPhone con las palabras del sistema y las tuyas: no se descarga nada y sólo hace falta prepararlo una vez.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var trackpadSection: some View {
+        Section("Trackpad del espacio") {
             Toggle("Deslizar espacio mueve el cursor", isOn: $config.trackpad)
+            sliderRow("Sensibilidad vertical", value: $config.trackpadStepY,
+                      range: 10...40, step: 1, suffix: " pt por línea")
+            sliderRow("Ancho de línea estimado", value: $config.trackpadChars,
+                      range: 15...80, step: 1, suffix: " caracteres")
+            Text("Baja los puntos por línea si te cuesta subir o bajar entre oraciones. El ancho estimado sólo se usa cuando el texto no tiene saltos de línea reales.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var dictionaryStatus: String {
+        if buildingDict { return "Preparando… \(Int(dictProgress * 100))%" }
+        if dictCount <= 0 { return "Sin preparar" }
+        return dictComplete ? "\(dictCount) palabras" : "\(dictCount) palabras (a medias)"
+    }
+
+    private var dictButtonTitle: String {
+        if dictComplete { return "Rehacer diccionario" }
+        return dictCount > 0 ? "Continuar preparación" : "Preparar diccionario"
+    }
+
+    /// Se puede cerrar la app a mitad: el avance queda guardado y continúa.
+    private func buildDictionary(restart: Bool) {
+        buildingDict = true
+        dictProgress = 0
+        DispatchQueue.global(qos: .utility).async {
+            let n = SwipeLexicon.build(restart: restart) { p in
+                DispatchQueue.main.async { dictProgress = p }
+            }
+            DispatchQueue.main.async {
+                dictCount = n
+                dictComplete = SwipeLexicon.isComplete
+                buildingDict = false
+            }
         }
     }
 
@@ -128,6 +186,9 @@ struct KeyboardSettingsView: View {
         store.set(config.haptics, forKey: KbPrefs.haptics)
         store.set(config.sound, forKey: KbPrefs.sound)
         store.set(config.hapticsLongPress, forKey: KbPrefs.hapticsLongPress)
+        store.set(config.swipe, forKey: KbPrefs.swipe)
+        store.set(config.trackpadStepY, forKey: KbPrefs.trackpadStepY)
+        store.set(config.trackpadChars, forKey: KbPrefs.trackpadChars)
         store.set(config.punctLeft, forKey: KbPrefs.punctLeft)
         store.set(config.punctRight, forKey: KbPrefs.punctRight)
     }
