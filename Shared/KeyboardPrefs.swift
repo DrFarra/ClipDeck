@@ -75,6 +75,28 @@ enum KbPrefs {
 enum WordLearner {
     static let wordsKey = "kb.learnedWords"     // [palabra: frecuencia]
     static let bigramsKey = "kb.learnedBigrams" // ["prev next": frecuencia]
+    static let blockedKey = "kb.blockedWords"   // palabras que el usuario no quiere ver
+
+    static func blockedWords() -> Set<String> {
+        Set(KbPrefs.store.stringArray(forKey: blockedKey) ?? [])
+    }
+
+    /// El usuario "olvida" una sugerencia: se borra de lo aprendido y no se
+    /// vuelve a proponer.
+    static func forget(_ word: String) {
+        let clean = word.lowercased()
+        var dict = learnedWords()
+        dict[clean] = nil
+        KbPrefs.store.set(dict, forKey: wordsKey)
+        var bigrams = KbPrefs.store.dictionary(forKey: bigramsKey) as? [String: Int] ?? [:]
+        for key in bigrams.keys where key.hasSuffix(" " + clean) || key.hasPrefix(clean + " ") {
+            bigrams[key] = nil
+        }
+        KbPrefs.store.set(bigrams, forKey: bigramsKey)
+        var blocked = Array(blockedWords())
+        if !blocked.contains(clean) { blocked.append(clean) }
+        KbPrefs.store.set(Array(blocked.prefix(400)), forKey: blockedKey)
+    }
 
     static func learnedWords() -> [String: Int] {
         KbPrefs.store.dictionary(forKey: wordsKey) as? [String: Int] ?? [:]
@@ -115,18 +137,22 @@ enum WordLearner {
     static func successors(of word: String) -> [String] {
         let prefix = word.lowercased() + " "
         let dict = KbPrefs.store.dictionary(forKey: bigramsKey) as? [String: Int] ?? [:]
+        let blocked = blockedWords()
         return dict
             .filter { $0.key.hasPrefix(prefix) }
             .sorted { $0.value > $1.value }
-            .prefix(3)
             .map { String($0.key.dropFirst(prefix.count)) }
+            .filter { !blocked.contains($0.lowercased()) }
+            .prefix(3)
+            .map { $0 }
     }
 
     /// Coincidencias del vocabulario aprendido para un prefijo.
     static func matches(prefix: String, limit: Int) -> [String] {
         let lower = prefix.lowercased()
+        let blocked = blockedWords()
         return learnedWords()
-            .filter { $0.key.hasPrefix(lower) && $0.key != lower }
+            .filter { $0.key.hasPrefix(lower) && $0.key != lower && !blocked.contains($0.key) }
             .sorted { $0.value > $1.value }
             .prefix(limit)
             .map { $0.key }
