@@ -47,6 +47,8 @@ final class KeyboardViewController: UIInputViewController {
     private let clipboardButton = UIButton(type: .system)
     private let emojiButton = UIButton(type: .system)
     private var suggestionButtons: [UIButton] = []
+    private let suggestionStack = UIStackView()
+    private var separatorViews: [UIView] = []
     private let keyboardArea = UIView()
     private var keyViews: [KeyRowView] = []
     private var rows: [[KeySpec]] = []
@@ -131,13 +133,28 @@ final class KeyboardViewController: UIInputViewController {
         emojiButton.addTarget(self, action: #selector(toggleEmoji), for: .touchDown)
         topBar.addSubview(emojiButton)
 
-        for _ in 0..<3 {
+        suggestionStack.axis = .horizontal
+        suggestionStack.distribution = .fillEqually
+        suggestionStack.alignment = .fill
+        suggestionStack.spacing = 0
+        topBar.addSubview(suggestionStack)
+        for i in 0..<3 {
             let b = UIButton(type: .system)
             b.titleLabel?.font = .systemFont(ofSize: 17)
+            b.titleLabel?.adjustsFontSizeToFitWidth = true
+            b.titleLabel?.minimumScaleFactor = 0.7
+            b.titleLabel?.lineBreakMode = .byTruncatingTail
             b.setTitleColor(.label, for: .normal)
-            b.addTarget(self, action: #selector(tapSuggestion(_:)), for: .touchDown)
-            topBar.addSubview(b)
+            b.addTarget(self, action: #selector(tapSuggestion(_:)), for: .touchUpInside)
             suggestionButtons.append(b)
+            if i > 0 {
+                let sep = UIView()
+                sep.backgroundColor = .separator
+                sep.widthAnchor.constraint(equalToConstant: 1).isActive = true
+                separatorViews.append(sep)
+                suggestionStack.addArrangedSubview(sep)
+            }
+            suggestionStack.addArrangedSubview(b)
         }
     }
 
@@ -179,9 +196,9 @@ final class KeyboardViewController: UIInputViewController {
         if needsInputModeSwitchKey {
             bottom.append(KeySpec(value: "", kind: .globe, widthFactor: 1.0))
         }
-        bottom.append(KeySpec(value: ",", kind: .comma, widthFactor: 1.0))
+        bottom.append(KeySpec(value: config.punctLeft, kind: .comma, widthFactor: 1.0))
         bottom.append(KeySpec(value: "", kind: .space, widthFactor: 5.0))
-        bottom.append(KeySpec(value: ".", kind: .period, widthFactor: 1.0))
+        bottom.append(KeySpec(value: config.punctRight, kind: .period, widthFactor: 1.0))
         bottom.append(KeySpec(value: "", kind: .ret, widthFactor: 1.6))
         result.append(bottom)
 
@@ -225,10 +242,8 @@ final class KeyboardViewController: UIInputViewController {
         clipboardButton.frame = CGRect(x: 4, y: 3, width: btn, height: 34)
         emojiButton.frame = CGRect(x: W - btn - 4, y: 3, width: btn, height: 34)
         let sugX = clipboardButton.frame.maxX + 4
-        let sugW = (emojiButton.frame.minX - 4 - sugX) / 3
-        for (i, b) in suggestionButtons.enumerated() {
-            b.frame = CGRect(x: sugX + CGFloat(i) * sugW, y: 3, width: sugW, height: 34)
-        }
+        suggestionStack.frame = CGRect(x: sugX, y: 3,
+                                       width: max(emojiButton.frame.minX - 4 - sugX, 0), height: 34)
 
         let areaY = topH
         let areaH = H - topH
@@ -356,8 +371,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     func returnTap() { commit("\n") }
-    func commaTap() { commit(",") }
-    func periodTap() { commit(".") }
+    func punctTap(_ ch: String) { commit(ch) }
 
     /// Cierra la palabra: autocorrección + aprendizaje + separador.
     private func commit(_ separator: String) {
@@ -383,7 +397,8 @@ final class KeyboardViewController: UIInputViewController {
 
         textDocumentProxy.insertText(separator)
 
-        if separator == "." || separator == "\n" {
+        let sentenceEnders: Set<String> = [".", "?", "!", "\n"]
+        if sentenceEnders.contains(separator) {
             if config.autoCapital { shift = .on; updateKeyCaps() }
             lastCommittedWord = ""
         } else {
@@ -424,10 +439,10 @@ final class KeyboardViewController: UIInputViewController {
 
     private func computeSuggestions() {
         let word = currentWord()
-        if word.isEmpty { setSuggestions(nextWordSuggestions(), revert: nil); return }
-
-        guard word.count >= 2, word.rangeOfCharacter(from: .letters) != nil else {
-            setSuggestions([]); return
+        // Sin palabra en curso (vacío, espacio, o algo sin letras): sugerir la
+        // próxima palabra probable en vez de dejar la barra vacía.
+        if word.isEmpty || word.count < 2 || word.rangeOfCharacter(from: .letters) == nil {
+            setSuggestions(nextWordSuggestions(), revert: nil); return
         }
         let lower = word.lowercased()
         let capitalize = word.first?.isUppercase == true
@@ -481,6 +496,10 @@ final class KeyboardViewController: UIInputViewController {
                 b.setTitle(nil, for: .normal)
                 b.isHidden = true
             }
+        }
+        // Muestra un separador sólo si el botón siguiente tiene contenido.
+        for (i, sep) in separatorViews.enumerated() {
+            sep.isHidden = (i + 1) >= titles.count
         }
     }
 
@@ -593,13 +612,13 @@ final class KeyboardViewController: UIInputViewController {
     private func showKeyboard() {
         panelHost?.view.isHidden = true
         keyboardArea.isHidden = false
-        suggestionButtons.forEach { $0.isHidden = ($0.title(for: .normal) == nil) }
+        suggestionStack.isHidden = false
         scheduleSuggestions()
     }
 
     private func showPanel(_ v: AnyView) {
         keyboardArea.isHidden = true
-        suggestionButtons.forEach { $0.isHidden = true }
+        suggestionStack.isHidden = true
         if panelHost == nil {
             let host = UIHostingController(rootView: v)
             host.view.backgroundColor = .clear
@@ -793,8 +812,7 @@ final class KeyView: UIView {
         case .backspace: controller?.backspaceDown()
         case .mode:      controller?.toggleSymbols()
         case .globe:     controller?.switchKeyboard()
-        case .comma:     controller?.commaTap()
-        case .period:    controller?.periodTap()
+        case .comma, .period: controller?.punctTap(spec.value)
         case .ret:       controller?.returnTap()
         case .space:
             if let t = touches.first {
@@ -950,7 +968,9 @@ struct ClipboardPanel: View {
                             LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible())],
                                       spacing: 6) {
                                 ForEach(snapshots) { snap in
-                                    Button { onPick(snap) } label: { card(snap) }.buttonStyle(.plain)
+                                    card(snap)
+                                        .contentShape(Rectangle())
+                                        .onTapGesture { onPick(snap) }
                                 }
                             }
                             .padding([.horizontal, .bottom], 6)
@@ -962,16 +982,15 @@ struct ClipboardPanel: View {
     }
 
     private func chip(_ text: String, _ icon: String, active: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: icon).font(.caption2)
-                Text(text).font(.caption)
-            }
-            .padding(.horizontal, 10).frame(height: 28)
-            .background(active ? Color.accentColor.opacity(0.22) : Color(.secondarySystemBackground), in: Capsule())
-            .foregroundStyle(active ? Color.accentColor : Color.primary)
+        HStack(spacing: 4) {
+            Image(systemName: icon).font(.caption2)
+            Text(text).font(.caption)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 10).frame(height: 28)
+        .background(active ? Color.accentColor.opacity(0.22) : Color(.secondarySystemBackground), in: Capsule())
+        .foregroundStyle(active ? Color.accentColor : Color.primary)
+        .contentShape(Capsule())
+        .onTapGesture(perform: action)
     }
 
     private func card(_ snap: ClipSnapshot) -> some View {
@@ -1039,18 +1058,18 @@ struct EmojiPanel: View {
             ScrollView {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 8), spacing: 2) {
                     ForEach(current, id: \.self) { e in
-                        Button { insert(e) } label: {
-                            Text(e).font(.system(size: 28)).frame(maxWidth: .infinity).frame(height: 38)
-                        }.buttonStyle(.plain)
+                        Text(e).font(.system(size: 28)).frame(maxWidth: .infinity).frame(height: 38)
+                            .contentShape(Rectangle())
+                            .onTapGesture { insert(e) }
                     }
                 }
                 .padding(.top, 4)
             }
             HStack(spacing: 2) {
-                Button { backToKeys() } label: {
-                    Text("ABC").font(.subheadline).frame(width: 46, height: 34)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 7))
-                }.buttonStyle(.plain)
+                Text("ABC").font(.subheadline).frame(width: 46, height: 34)
+                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 7))
+                    .contentShape(Rectangle())
+                    .onTapGesture { backToKeys() }
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 2) {
                         catButton("🕐", -1)
@@ -1059,20 +1078,20 @@ struct EmojiPanel: View {
                         }
                     }
                 }
-                Button { deleteBackward() } label: {
-                    Image(systemName: "delete.left").font(.body).frame(width: 40, height: 34)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 7))
-                }.buttonStyle(.plain)
+                Image(systemName: "delete.left").font(.body).frame(width: 40, height: 34)
+                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 7))
+                    .contentShape(Rectangle())
+                    .onTapGesture { deleteBackward() }
             }
             .padding(.horizontal, 3).padding(.bottom, 3)
         }
     }
 
     private func catButton(_ icon: String, _ index: Int) -> some View {
-        Button { categoryIndex = index } label: {
-            Text(icon).font(.system(size: 18)).frame(width: 34, height: 34)
-                .background(categoryIndex == index ? Color.accentColor.opacity(0.22) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 7))
-        }.buttonStyle(.plain)
+        Text(icon).font(.system(size: 18)).frame(width: 34, height: 34)
+            .background(categoryIndex == index ? Color.accentColor.opacity(0.22) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 7))
+            .contentShape(Rectangle())
+            .onTapGesture { categoryIndex = index }
     }
 }
