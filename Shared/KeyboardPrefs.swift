@@ -21,6 +21,9 @@ enum KbPrefs {
     static let sound           = "kb.sound"
     static let haptics         = "kb.haptics"
     static let hapticsLongPress = "kb.hapticsLongPress"
+    static let swipe           = "kb.swipeTyping"
+    static let trackpadStepY   = "kb.trackpadLineStep"     // pt por línea
+    static let trackpadChars   = "kb.trackpadLineChars"    // ancho de línea estimado
     static let punctLeft       = "kb.punctLeft"
     static let punctRight      = "kb.punctRight"
 
@@ -48,6 +51,9 @@ enum KbPrefs {
         var sound: Bool
         var haptics: Bool
         var hapticsLongPress: Bool
+        var swipe: Bool
+        var trackpadStepY: Double
+        var trackpadChars: Double
         var punctLeft: String
         var punctRight: String
 
@@ -67,6 +73,9 @@ enum KbPrefs {
                    sound: KbPrefs.bool(KbPrefs.sound, default: false),
                    haptics: KbPrefs.bool(KbPrefs.haptics, default: true),
                    hapticsLongPress: KbPrefs.bool(KbPrefs.hapticsLongPress, default: true),
+                   swipe: KbPrefs.bool(KbPrefs.swipe, default: true),
+                   trackpadStepY: KbPrefs.double(KbPrefs.trackpadStepY, default: 22),
+                   trackpadChars: KbPrefs.double(KbPrefs.trackpadChars, default: 38),
                    punctLeft: KbPrefs.store.string(forKey: KbPrefs.punctLeft) ?? ",",
                    punctRight: KbPrefs.store.string(forKey: KbPrefs.punctRight) ?? ".")
         }
