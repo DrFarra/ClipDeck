@@ -40,12 +40,14 @@ final class KeyboardViewController: UIInputViewController {
     private var suggestionWork: DispatchWorkItem?
 
     private let haptic = UIImpactFeedbackGenerator(style: .light)
+    private let longPressHaptic = UIImpactFeedbackGenerator(style: .medium)
+    private let selectionHaptic = UISelectionFeedbackGenerator()
 
     // UI
     private var root: FeedbackHostView!
     private let topBar = UIView()
-    private let clipboardButton = UIButton(type: .system)
-    private let emojiButton = UIButton(type: .system)
+    private let clipboardButton = IconTouchButton()
+    private let emojiButton = IconTouchButton()
     private var suggestionButtons: [SuggestionButton] = []
     private var confirmOverlay: UIView?
     private var confirmWord: String?
@@ -101,6 +103,29 @@ final class KeyboardViewController: UIInputViewController {
 
         rebuildKeys()
         precomputeChecker()
+        prewarmEmojiPanel()
+    }
+
+    /// Crea el panel de emojis por adelantado (oculto) para que el primer
+    /// toque en el icono no tenga que construir la colección completa.
+    private func prewarmEmojiPanel() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.emojiPanel == nil else { return }
+            let panel = EmojiPanelView()
+            panel.insert = { [weak self] e in
+                self?.textDocumentProxy.insertText(e)
+                EmojiStore.registerRecent(e)
+                self?.keyFeedback()
+            }
+            panel.backToKeys = { [weak self] in self?.mode = .keys; self?.refreshMode() }
+            panel.deleteDown = { [weak self] in self?.backspaceDown() }
+            panel.deleteUp = { [weak self] in self?.backspaceUp() }
+            panel.frame = self.keyboardArea.frame
+            panel.isHidden = true
+            self.root.addSubview(panel)
+            self.emojiPanel = panel
+            panel.reloadCurrent()
+        }
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -132,14 +157,12 @@ final class KeyboardViewController: UIInputViewController {
     private func setupTopBar() {
         root.addSubview(topBar)
 
-        clipboardButton.setImage(UIImage(systemName: "doc.on.clipboard"), for: .normal)
-        clipboardButton.tintColor = .label
-        clipboardButton.addTarget(self, action: #selector(toggleClipboard), for: .touchDown)
+        clipboardButton.setSymbol("doc.on.clipboard")
+        clipboardButton.onTap = { [weak self] in self?.toggleClipboard() }
         topBar.addSubview(clipboardButton)
 
-        emojiButton.setImage(UIImage(systemName: "face.smiling"), for: .normal)
-        emojiButton.tintColor = .label
-        emojiButton.addTarget(self, action: #selector(toggleEmoji), for: .touchDown)
+        emojiButton.setSymbol("face.smiling")
+        emojiButton.onTap = { [weak self] in self?.toggleEmoji() }
         topBar.addSubview(emojiButton)
 
         for i in 0..<3 {
@@ -348,6 +371,21 @@ final class KeyboardViewController: UIInputViewController {
         if config.sound { UIDevice.current.playInputClick() }
     }
 
+    /// Vibración al abrir el globo de opciones o entrar en modo trackpad.
+    /// Es independiente de la vibración de teclas: se puede tener una sin la otra.
+    func longPressFeedback() {
+        guard config.hapticsLongPress else { return }
+        longPressHaptic.impactOccurred()
+        longPressHaptic.prepare()
+    }
+
+    /// Vibración corta al pasar de una opción a otra dentro del globo.
+    func selectionFeedback() {
+        guard config.hapticsLongPress else { return }
+        selectionHaptic.selectionChanged()
+        selectionHaptic.prepare()
+    }
+
     func insertChar(_ base: String) {
         keyFeedback()
         let upper = shift != .off && !symbolsMode
@@ -474,9 +512,7 @@ final class KeyboardViewController: UIInputViewController {
         trackpadAccumX = 0
         trackpadAccumY = 0
 
-        if config.haptics {
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        }
+        longPressFeedback()
 
         // Atenúa las teclas (efecto "se apagan las letras").
         keyViews.forEach { $0.setDimmed(true) }
@@ -908,21 +944,23 @@ final class KeyboardViewController: UIInputViewController {
 
     // MARK: Paneles (portapapeles / emoji en SwiftUI, no críticos para latencia)
 
-    @objc private func toggleClipboard() {
+    private func toggleClipboard() {
         keyFeedback()
         mode = (mode == .clipboard) ? .keys : .clipboard
         refreshMode()
     }
 
-    @objc private func toggleEmoji() {
+    private func toggleEmoji() {
         keyFeedback()
         mode = (mode == .emoji) ? .keys : .emoji
         refreshMode()
     }
 
     private func refreshMode() {
-        clipboardButton.tintColor = mode == .clipboard ? .tintColor : .label
-        emojiButton.tintColor = mode == .emoji ? .tintColor : .label
+        clipboardButton.setSymbol(mode == .clipboard ? "keyboard" : "doc.on.clipboard",
+                                  active: mode == .clipboard)
+        emojiButton.setSymbol(mode == .emoji ? "keyboard" : "face.smiling",
+                              active: mode == .emoji)
         switch mode {
         case .keys:      showKeyboard()
         case .clipboard: showPanel(AnyView(clipboardPanel()))
@@ -1238,8 +1276,12 @@ final class KeyView: UIView {
         if accentBar != nil {
             let p = t.location(in: self)
             let slot = Int((p.x + 20) / 34)
-            selectedAccent = min(max(slot, 0), spec.variants.count - 1)
-            highlightAccent()
+            let newIndex = min(max(slot, 0), spec.variants.count - 1)
+            if newIndex != selectedAccent {
+                selectedAccent = newIndex
+                highlightAccent()
+                controller?.selectionFeedback()
+            }
             return
         }
         if spec.kind == .space, let controller, controller.trackpadEnabled {
@@ -1323,6 +1365,7 @@ final class KeyView: UIView {
     private func showAccents() {
         guard let root = controller?.view, !spec.variants.isEmpty else { return }
         controller?.hidePopup()
+        controller?.longPressFeedback()
         let variants = spec.variants
         let cellW: CGFloat = 34, hgt: CGFloat = 44
         let w = CGFloat(variants.count) * cellW + 8
@@ -1648,7 +1691,7 @@ final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionView
         abcButton.setTitleColor(.label, for: .normal)
         abcButton.backgroundColor = .secondarySystemBackground
         abcButton.layer.cornerRadius = 7
-        abcButton.addTarget(self, action: #selector(tapABC), for: .touchUpInside)
+        abcButton.addTarget(self, action: #selector(tapABC), for: .touchDown)
         bottomBar.addSubview(abcButton)
 
         deleteButton.setImage(UIImage(systemName: "delete.left"), for: .normal)
@@ -1679,7 +1722,7 @@ final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionView
         b.titleLabel?.font = .systemFont(ofSize: 18)
         b.tag = index
         b.layer.cornerRadius = 7
-        b.addTarget(self, action: #selector(tapCategory(_:)), for: .touchUpInside)
+        b.addTarget(self, action: #selector(tapCategory(_:)), for: .touchDown)
         return b
     }
 
@@ -1797,7 +1840,7 @@ final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionView
             btn.titleLabel?.font = .systemFont(ofSize: 26)
             btn.frame = CGRect(x: 4 + CGFloat(i) * cellW, y: 4, width: cellW, height: h - 8)
             btn.tag = i        // 0 = amarillo, 1...5 = tono i-1
-            btn.addTarget(self, action: #selector(pickTone(_:)), for: .touchUpInside)
+            btn.addTarget(self, action: #selector(pickTone(_:)), for: .touchDown)
             bar.addSubview(btn)
         }
         tonePopup = bar
@@ -1839,5 +1882,65 @@ final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionView
             if !inBar { dismissTonePopup() }
         }
         return super.hitTest(point, with: event)
+    }
+}
+
+
+// MARK: - Botón de icono con toque directo
+//
+// Los UIButton dentro de una extensión de teclado pueden tragarse el primer
+// toque cuando el sistema está entregando otros toques; las teclas y la barra
+// de sugerencias ya usan toques crudos, así que estos botones hacen lo mismo.
+
+final class IconTouchButton: UIView {
+    var onTap: (() -> Void)?
+
+    private let imageView = UIImageView()
+    private var isDown = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        imageView.contentMode = .center
+        imageView.tintColor = .label
+        addSubview(imageView)
+        layer.cornerRadius = 8
+        isMultipleTouchEnabled = false
+        isExclusiveTouch = false
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        imageView.frame = bounds
+    }
+
+    func setSymbol(_ name: String, active: Bool = false) {
+        imageView.image = UIImage(systemName: name,
+                                  withConfiguration: UIImage.SymbolConfiguration(pointSize: 17,
+                                                                                 weight: .medium))
+        imageView.tintColor = active ? .tintColor : .label
+        backgroundColor = active ? UIColor.tintColor.withAlphaComponent(0.22) : .clear
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard !isDown else { return }
+        isDown = true
+        alpha = 0.5
+        onTap?()                       // responde al primer contacto
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        isDown = false
+        alpha = 1
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        isDown = false
+        alpha = 1
+    }
+
+    /// Área táctil algo mayor que el icono, para no fallar el toque.
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        bounds.insetBy(dx: -6, dy: -4).contains(point)
     }
 }
