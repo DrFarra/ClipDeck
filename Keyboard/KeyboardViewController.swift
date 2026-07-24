@@ -844,7 +844,7 @@ final class KeyboardViewController: UIInputViewController {
         let context = ModelContext(ClipStore.makeContainer())
         CaptureService.captureIfNeeded(context: context)
         var d = FetchDescriptor<ClipItem>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
-        d.fetchLimit = 40
+        d.fetchLimit = 120
         let items = (try? context.fetch(d)) ?? []
         return items.filter { favoritesOnly ? $0.isFavorite : true }.map { item in
             ClipSnapshot(id: item.id, typeLabel: item.type.label, systemImage: item.type.systemImage,
@@ -1155,6 +1155,16 @@ struct ClipboardPanel: View {
     let onFilter: (Bool) -> Void
     let onPick: (ClipSnapshot) -> Void
 
+    @State private var query: String = ""
+
+    private var filtered: [ClipSnapshot] {
+        guard !query.isEmpty else { return snapshots }
+        let q = query.lowercased()
+        return snapshots.filter {
+            $0.preview.lowercased().contains(q) || $0.typeLabel.lowercased().contains(q)
+        }
+    }
+
     var body: some View {
         Group {
             if !hasFullAccess {
@@ -1166,16 +1176,22 @@ struct ClipboardPanel: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 VStack(spacing: 6) {
+                    searchField
+
                     HStack(spacing: 8) {
                         chip("Recientes", "clock.arrow.circlepath", active: !favoritesOnly) { onFilter(false) }
                         chip("Favoritos", "star.fill", active: favoritesOnly) { onFilter(true) }
                         Spacer()
                     }
                     .padding(.horizontal, 6)
-                    .padding(.top, 6)
 
                     if snapshots.isEmpty {
                         Text("Historial vacío. Copia algo y vuelve a abrir este panel.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if filtered.isEmpty {
+                        Text("Sin resultados para «\(query)».")
                             .font(.caption).foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1183,7 +1199,7 @@ struct ClipboardPanel: View {
                         ScrollView {
                             LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible())],
                                       spacing: 6) {
-                                ForEach(snapshots) { snap in
+                                ForEach(filtered) { snap in
                                     card(snap)
                                         .contentShape(Rectangle())
                                         .onTapGesture { onPick(snap) }
@@ -1195,6 +1211,30 @@ struct ClipboardPanel: View {
                 }
             }
         }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(.secondary)
+            TextField("Buscar en el portapapeles", text: $query)
+                .font(.caption)
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled(true)
+                .textInputAutocapitalization(.never)
+            if !query.isEmpty {
+                Button {
+                    query = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill").font(.caption).foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(Color(.secondarySystemBackground), in: Capsule())
+        .padding(.horizontal, 6)
+        .padding(.top, 6)
     }
 
     private func chip(_ text: String, _ icon: String, active: Bool, action: @escaping () -> Void) -> some View {
