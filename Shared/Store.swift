@@ -4,12 +4,22 @@ import SwiftData
 /// Identificador del App Group compartido entre la app y sus extensiones.
 /// Cámbialo junto con los bundle IDs en project.yml si usas otro prefijo.
 enum AppGroup {
-    static let id = "group.com.emilio.clipdeck"
+    static let preferredID = "group.com.emilio.clipdeck"
 
-    /// URL del contenedor compartido. Si el App Group no está aprovisionado
-    /// (p. ej. durante pruebas sin firma), se usa Application Support local.
+    /// Los certificados de firma de pago suelen reescribir los App Groups a IDs
+    /// propios del equipo firmante. Sondeamos candidatos y usamos el primero
+    /// que el sistema nos conceda.
+    static let candidateIDs: [String] = [preferredID] + (1...5).map { "group.1339403ddeb57d8b.\($0)" }
+
+    static let resolvedID: String? = candidateIDs.first {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0) != nil
+    }
+
+    /// URL del contenedor compartido. Si ningún App Group está aprovisionado,
+    /// se usa Application Support local (la app funciona, sin compartir datos).
     static var containerURL: URL {
-        if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: id) {
+        if let id = resolvedID,
+           let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: id) {
             return url
         }
         let fallback = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -18,7 +28,10 @@ enum AppGroup {
     }
 
     static var sharedDefaults: UserDefaults {
-        UserDefaults(suiteName: id) ?? .standard
+        if let id = resolvedID, let defaults = UserDefaults(suiteName: id) {
+            return defaults
+        }
+        return .standard
     }
 }
 
