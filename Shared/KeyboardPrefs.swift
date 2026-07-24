@@ -77,33 +77,106 @@ enum WordLearner {
     static let bigramsKey = "kb.learnedBigrams" // ["prev next": frecuencia]
     static let blockedKey = "kb.blockedWords"   // palabras que el usuario no quiere ver
 
+    // MARK: Caché en memoria
+    //
+    // Antes cada palabra aprendida releía y reescribía el diccionario completo
+    // en UserDefaults (hasta 2600 entradas serializadas a plist) en pleno hilo
+    // principal, en cada espacio. Ahora se mantiene en memoria y se persiste
+    // de forma diferida en segundo plano.
+
+    private static let lock = NSLock()
+    private static var wordsCache: [String: Int]?
+    private static var bigramsCache: [String: Int]?
+    private static var blockedCache: Set<String>?
+    private static var wordsDirty = false
+    private static var bigramsDirty = false
+    private static var flushScheduled = false
+
+    private static func wordsDict() -> [String: Int] {
+        if let c = wordsCache { return c }
+        let d = KbPrefs.store.dictionary(forKey: wordsKey) as? [String: Int] ?? [:]
+        wordsCache = d
+        return d
+    }
+
+    private static func bigramsDict() -> [String: Int] {
+        if let c = bigramsCache { return c }
+        let d = KbPrefs.store.dictionary(forKey: bigramsKey) as? [String: Int] ?? [:]
+        bigramsCache = d
+        return d
+    }
+
+    /// Programa una escritura a disco fuera del hilo principal.
+    private static func scheduleFlush() {
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2.0) {
+            flush()
+        }
+    }
+
+    /// Persiste los cambios pendientes. Seguro de llamar en cualquier momento.
+    static func flush() {
+        lock.lock()
+        let words = wordsDirty ? wordsCache : nil
+        let bigrams = bigramsDirty ? bigramsCache : nil
+        wordsDirty = false
+        bigramsDirty = false
+        flushScheduled = false
+        lock.unlock()
+
+        if let words { KbPrefs.store.set(words, forKey: wordsKey) }
+        if let bigrams { KbPrefs.store.set(bigrams, forKey: bigramsKey) }
+    }
+
+    /// Descarta la caché para releer de disco (tras editar desde la app).
+    static func invalidateCache() {
+        lock.lock()
+        wordsCache = nil
+        bigramsCache = nil
+        blockedCache = nil
+        lock.unlock()
+    }
+
     static func blockedWords() -> Set<String> {
-        Set(KbPrefs.store.stringArray(forKey: blockedKey) ?? [])
+        lock.lock(); defer { lock.unlock() }
+        if let c = blockedCache { return c }
+        let set = Set(KbPrefs.store.stringArray(forKey: blockedKey) ?? [])
+        blockedCache = set
+        return set
     }
 
     /// El usuario "olvida" una sugerencia: se borra de lo aprendido y no se
     /// vuelve a proponer.
     static func forget(_ word: String) {
         let clean = word.lowercased()
-        var dict = learnedWords()
+        lock.lock()
+        var dict = wordsDict()
         dict[clean] = nil
-        KbPrefs.store.set(dict, forKey: wordsKey)
-        var bigrams = KbPrefs.store.dictionary(forKey: bigramsKey) as? [String: Int] ?? [:]
+        wordsCache = dict
+        wordsDirty = true
+        var bigrams = bigramsDict()
         for key in bigrams.keys where key.hasSuffix(" " + clean) || key.hasPrefix(clean + " ") {
             bigrams[key] = nil
         }
-        KbPrefs.store.set(bigrams, forKey: bigramsKey)
-        var blocked = Array(blockedWords())
-        if !blocked.contains(clean) { blocked.append(clean) }
+        bigramsCache = bigrams
+        bigramsDirty = true
+        var blocked = blockedCache ?? Set(KbPrefs.store.stringArray(forKey: blockedKey) ?? [])
+        blocked.insert(clean)
+        blockedCache = blocked
+        lock.unlock()
         KbPrefs.store.set(Array(blocked.prefix(400)), forKey: blockedKey)
+        flush()
     }
 
     static func learnedWords() -> [String: Int] {
-        KbPrefs.store.dictionary(forKey: wordsKey) as? [String: Int] ?? [:]
+        lock.lock(); defer { lock.unlock() }
+        return wordsDict()
     }
 
     static func isKnown(_ word: String) -> Bool {
-        learnedWords()[word.lowercased()] != nil
+        lock.lock(); defer { lock.unlock() }
+        return wordsDict()[word.lowercased()] != nil
     }
 
     static func learn(_ word: String) {
@@ -111,32 +184,42 @@ enum WordLearner {
         guard clean.count >= 2, clean.count <= 24,
               clean.rangeOfCharacter(from: .letters) != nil,
               clean.rangeOfCharacter(from: .decimalDigits) == nil else { return }
-        var dict = learnedWords()
+        lock.lock()
+        var dict = wordsDict()
         dict[clean, default: 0] += 1
         if dict.count > 600 {
             // Poda: elimina las de menor frecuencia
             let sorted = dict.sorted { $0.value > $1.value }.prefix(500)
             dict = Dictionary(uniqueKeysWithValues: Array(sorted))
         }
-        KbPrefs.store.set(dict, forKey: wordsKey)
+        wordsCache = dict
+        wordsDirty = true
+        lock.unlock()
+        scheduleFlush()
     }
 
     static func learnBigram(previous: String, next: String) {
         let key = previous.lowercased() + " " + next.lowercased()
         guard key.count <= 40 else { return }
-        var dict = KbPrefs.store.dictionary(forKey: bigramsKey) as? [String: Int] ?? [:]
+        lock.lock()
+        var dict = bigramsDict()
         dict[key, default: 0] += 1
         if dict.count > 2000 {
             let sorted = dict.sorted { $0.value > $1.value }.prefix(1600)
             dict = Dictionary(uniqueKeysWithValues: Array(sorted))
         }
-        KbPrefs.store.set(dict, forKey: bigramsKey)
+        bigramsCache = dict
+        bigramsDirty = true
+        lock.unlock()
+        scheduleFlush()
     }
 
     /// Palabras que suelen seguir a `word` según lo que ha escrito el usuario.
     static func successors(of word: String) -> [String] {
         let prefix = word.lowercased() + " "
-        let dict = KbPrefs.store.dictionary(forKey: bigramsKey) as? [String: Int] ?? [:]
+        lock.lock()
+        let dict = bigramsDict()
+        lock.unlock()
         let blocked = blockedWords()
         return dict
             .filter { $0.key.hasPrefix(prefix) }
@@ -151,7 +234,10 @@ enum WordLearner {
     static func matches(prefix: String, limit: Int) -> [String] {
         let lower = prefix.lowercased()
         let blocked = blockedWords()
-        return learnedWords()
+        lock.lock()
+        let all = wordsDict()
+        lock.unlock()
+        return all
             .filter { $0.key.hasPrefix(lower) && $0.key != lower && !blocked.contains($0.key) }
             .sorted { $0.value > $1.value }
             .prefix(limit)
@@ -159,8 +245,87 @@ enum WordLearner {
     }
 
     static func clear() {
+        lock.lock()
+        wordsCache = [:]
+        bigramsCache = [:]
+        wordsDirty = false
+        bigramsDirty = false
+        lock.unlock()
         KbPrefs.store.removeObject(forKey: wordsKey)
         KbPrefs.store.removeObject(forKey: bigramsKey)
+    }
+
+    // MARK: Gestión manual (pantalla de palabras aprendidas)
+
+    /// Lista ordenada por frecuencia descendente.
+    static func allWordsSorted() -> [(word: String, count: Int)] {
+        learnedWords().sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
+            .map { (word: $0.key, count: $0.value) }
+    }
+
+    /// Añade o actualiza una palabra manualmente (y la desbloquea).
+    @discardableResult
+    static func addManual(_ word: String, count: Int = 5) -> Bool {
+        let clean = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard clean.count >= 2, clean.count <= 24,
+              clean.rangeOfCharacter(from: .letters) != nil,
+              !clean.contains(" ") else { return false }
+        lock.lock()
+        var dict = wordsDict()
+        dict[clean] = max(count, dict[clean] ?? 0)
+        wordsCache = dict
+        wordsDirty = true
+        var blocked = blockedCache ?? Set(KbPrefs.store.stringArray(forKey: blockedKey) ?? [])
+        blocked.remove(clean)
+        blockedCache = blocked
+        lock.unlock()
+        KbPrefs.store.set(Array(blocked), forKey: blockedKey)
+        flush()
+        return true
+    }
+
+    /// Renombra una palabra conservando su frecuencia.
+    @discardableResult
+    static func rename(_ old: String, to new: String) -> Bool {
+        let from = old.lowercased()
+        let to = new.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard to.count >= 2, to.count <= 24, to != from,
+              to.rangeOfCharacter(from: .letters) != nil, !to.contains(" ") else { return false }
+        lock.lock()
+        var dict = wordsDict()
+        let freq = dict[from] ?? 1
+        dict[from] = nil
+        dict[to] = max(freq, dict[to] ?? 0)
+        wordsCache = dict
+        wordsDirty = true
+        lock.unlock()
+        flush()
+        return true
+    }
+
+    /// Elimina una palabra sin bloquearla (a diferencia de `forget`).
+    static func remove(_ word: String) {
+        let clean = word.lowercased()
+        lock.lock()
+        var dict = wordsDict()
+        dict[clean] = nil
+        wordsCache = dict
+        wordsDirty = true
+        lock.unlock()
+        flush()
+    }
+
+    /// Palabras bloqueadas (no se sugieren) para poder gestionarlas.
+    static func blockedList() -> [String] { blockedWords().sorted() }
+
+    static func unblock(_ word: String) {
+        let clean = word.lowercased()
+        lock.lock()
+        var blocked = blockedCache ?? Set(KbPrefs.store.stringArray(forKey: blockedKey) ?? [])
+        blocked.remove(clean)
+        blockedCache = blocked
+        lock.unlock()
+        KbPrefs.store.set(Array(blocked), forKey: blockedKey)
     }
 
     static var learnedCount: Int { learnedWords().count }
