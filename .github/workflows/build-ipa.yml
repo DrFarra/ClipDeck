@@ -1,0 +1,50 @@
+name: Build unsigned IPA
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build (Release, sin firma)
+        run: |
+          xcodebuild \
+            -project ClipDeck.xcodeproj \
+            -scheme ClipDeck \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package IPA
+        run: |
+          APP_PATH="build/Build/Products/Release-iphoneos/ClipDeck.app"
+          ls -la "$(dirname "$APP_PATH")"
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qry ClipDeck-unsigned.ipa Payload
+          ls -la ClipDeck-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipDeck-unsigned-ipa
+          path: ClipDeck-unsigned.ipa
+          retention-days: 30
