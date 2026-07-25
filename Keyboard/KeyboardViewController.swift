@@ -200,10 +200,12 @@ final class KeyboardViewController: UIInputViewController {
 
         clipboardButton.setSymbol("doc.on.clipboard")
         clipboardButton.onTap = { [weak self] in self?.toggleClipboard() }
+        clipboardButton.onFeedback = { [weak self] in self?.longPressFeedback() }
         topBar.addSubview(clipboardButton)
 
         emojiButton.setSymbol("face.smiling")
         emojiButton.onTap = { [weak self] in self?.toggleEmoji() }
+        emojiButton.onFeedback = { [weak self] in self?.longPressFeedback() }
         topBar.addSubview(emojiButton)
 
         topBar.leftButton = clipboardButton
@@ -303,26 +305,34 @@ final class KeyboardViewController: UIInputViewController {
         let H = root.bounds.height
         guard W > 0, H > 0 else { return }
 
-        let topH: CGFloat = 40
+        let topH: CGFloat = 44
         topBar.frame = CGRect(x: 0, y: 0, width: W, height: topH)
 
-        // Ocupan toda la altura de la barra: cuanto mayor sea el blanco, menos
-        // posibilidades hay de fallar el toque.
+        // Los iconos NO tocan los bordes de la pantalla.
+        //
+        // Cuando fallaban no había ni respuesta visual: el toque no llegaba a
+        // la vista, lo interceptaba el sistema antes. Las franjas de unos 20 pt
+        // pegadas a los laterales están reservadas para los gestos de borde del
+        // sistema, y ahí los toques se retrasan o se cancelan. Todo lo que
+        // fallaba estaba en esa franja; la barra de sugerencias, que siempre
+        // respondió bien, empieza mucho más adentro. Por eso los iconos se
+        // apartan del borde.
+        let edge: CGFloat = 26
         let btn: CGFloat = 52
-        clipboardButton.frame = CGRect(x: 0, y: 0, width: btn, height: topH)
-        emojiButton.frame = CGRect(x: W - btn, y: 0, width: btn, height: topH)
+        clipboardButton.frame = CGRect(x: edge, y: 2, width: btn, height: topH - 4)
+        emojiButton.frame = CGRect(x: W - edge - btn, y: 2, width: btn, height: topH - 4)
         root.priorityTargets = [
-            (CGRect(x: 0, y: 0, width: btn, height: topH), clipboardButton),
-            (CGRect(x: W - btn, y: 0, width: btn, height: topH), emojiButton)
+            (CGRect(x: edge - 8, y: 0, width: btn + 16, height: topH), clipboardButton),
+            (CGRect(x: W - edge - btn - 8, y: 0, width: btn + 16, height: topH), emojiButton)
         ]
-        let sugX = clipboardButton.frame.maxX + 4
-        let sugTotal = max(emojiButton.frame.minX - 4 - sugX, 0)
+        let sugX = clipboardButton.frame.maxX + 6
+        let sugTotal = max(emojiButton.frame.minX - 6 - sugX, 0)
         let sugW = sugTotal / 3
         for (i, b) in suggestionButtons.enumerated() {
-            b.frame = CGRect(x: sugX + CGFloat(i) * sugW, y: 3, width: sugW, height: 34)
+            b.frame = CGRect(x: sugX + CGFloat(i) * sugW, y: 5, width: sugW, height: 34)
         }
         for (i, sep) in separatorViews.enumerated() {
-            sep.frame = CGRect(x: sugX + CGFloat(i + 1) * sugW - 0.5, y: 10, width: 1, height: 20)
+            sep.frame = CGRect(x: sugX + CGFloat(i + 1) * sugW - 0.5, y: 12, width: 1, height: 20)
         }
 
         let areaY = topH
@@ -2179,6 +2189,8 @@ final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionView
 
 final class IconTouchButton: UIView {
     var onTap: (() -> Void)?
+    /// Vibración al registrar el toque: sirve para notar que llegó sin mirar.
+    var onFeedback: (() -> Void)?
 
     private let imageView = UIImageView()
     private var lastFire: CFTimeInterval = 0
@@ -2202,7 +2214,7 @@ final class IconTouchButton: UIView {
 
     func setSymbol(_ name: String, active: Bool = false) {
         imageView.image = UIImage(systemName: name,
-                                  withConfiguration: UIImage.SymbolConfiguration(pointSize: 17,
+                                  withConfiguration: UIImage.SymbolConfiguration(pointSize: 19,
                                                                                  weight: .medium))
         imageView.tintColor = active ? .tintColor : .label
         backgroundColor = active ? UIColor.tintColor.withAlphaComponent(0.22) : .clear
@@ -2217,6 +2229,7 @@ final class IconTouchButton: UIView {
         guard now - lastFire > 0.25 else { return }
         lastFire = now
         flash()
+        onFeedback?()
         onTap?()
     }
 
