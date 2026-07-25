@@ -131,6 +131,7 @@ final class KeyboardViewController: UIInputViewController {
         rebuildKeys()
         precomputeChecker()
         prewarmEmojiPanel()
+        prewarmClipboard()
         prepareSwipe()
     }
 
@@ -317,8 +318,8 @@ final class KeyboardViewController: UIInputViewController {
         // fallaba estaba en esa franja; la barra de sugerencias, que siempre
         // respondió bien, empieza mucho más adentro. Por eso los iconos se
         // apartan del borde.
-        let edge: CGFloat = 26
-        let btn: CGFloat = 52
+        let edge: CGFloat = 17
+        let btn: CGFloat = 46
         clipboardButton.frame = CGRect(x: edge, y: 2, width: btn, height: topH - 4)
         emojiButton.frame = CGRect(x: W - edge - btn, y: 2, width: btn, height: topH - 4)
         root.priorityTargets = [
@@ -1231,6 +1232,11 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private var favoritesOnly = false
+
+    // Portapapeles: contenedor y tarjetas en caché.
+    private var clipContainer: ModelContainer?
+    private var allSnapshots: [ClipSnapshot] = []
+    private var snapshotsAt = Date.distantPast
     var trackpadEnabled: Bool { config.trackpad }
 
     private func clipboardPanel() -> ClipboardPanel {
@@ -1238,8 +1244,10 @@ final class KeyboardViewController: UIInputViewController {
                        snapshots: loadSnapshots(),
                        favoritesOnly: favoritesOnly,
                        onFilter: { [weak self] fav in
-                           self?.favoritesOnly = fav
-                           self?.refreshMode()
+                           guard let self else { return }
+                           self.favoritesOnly = fav
+                           self.snapshotsAt = Date()   // filtra en memoria, sin releer
+                           self.refreshMode()
                        },
                        onPick: { [weak self] snap in
                            guard let self else { return }
@@ -1254,19 +1262,45 @@ final class KeyboardViewController: UIInputViewController {
                        })
     }
 
+    /// Prepara la base de datos por adelantado, en segundo plano.
+    ///
+    /// Abrir el contenedor de SwiftData (montar el esquema y la base) es lo
+    /// caro, y antes se hacía entero en el hilo principal cada vez que se
+    /// tocaba el icono del portapapeles: por eso el panel tardaba en aparecer.
+    /// Ahora se abre una sola vez por sesión de teclado.
+    private func prewarmClipboard() {
+        guard hasFullAccess else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let container = ClipStore.makeContainer()
+            DispatchQueue.main.async { self?.clipContainer = container }
+        }
+    }
+
     private func loadSnapshots() -> [ClipSnapshot] {
         guard hasFullAccess else { return [] }
-        let context = ModelContext(ClipStore.makeContainer())
+        // El filtro de favoritos y las reaperturas seguidas usan lo que ya está
+        // en memoria: no hace falta volver a leer la base.
+        if allSnapshots.isEmpty || Date().timeIntervalSince(snapshotsAt) > 0.8 {
+            refreshSnapshots()
+        }
+        return favoritesOnly ? allSnapshots.filter { $0.isFavorite } : allSnapshots
+    }
+
+    private func refreshSnapshots() {
+        if clipContainer == nil { clipContainer = ClipStore.makeContainer() }
+        guard let container = clipContainer else { return }
+        let context = ModelContext(container)
         CaptureService.captureIfNeeded(context: context)
         var d = FetchDescriptor<ClipItem>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
-        d.fetchLimit = 120
+        d.fetchLimit = 60
         let items = (try? context.fetch(d)) ?? []
-        return items.filter { favoritesOnly ? $0.isFavorite : true }.map { item in
+        allSnapshots = items.map { item in
             ClipSnapshot(id: item.id, typeLabel: item.type.label, systemImage: item.type.systemImage,
                          preview: item.displayTitle, insertable: insertableText(for: item),
                          imageData: item.type == .image ? item.assetData : nil,
                          isSensitive: item.isSensitive, isFavorite: item.isFavorite)
         }
+        snapshotsAt = Date()
     }
 
     private func insertableText(for item: ClipItem) -> String? {
@@ -1996,12 +2030,20 @@ final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionView
     }
 
     func reloadCurrent() {
+        var next: [String] = current
         if categoryIndex == -1 {
             let recents = EmojiStore.recents
-            current = recents.isEmpty ? EmojiCatalog.categories.first?.emojis ?? [] : recents
+            next = recents.isEmpty ? EmojiCatalog.categories.first?.emojis ?? [] : recents
         } else if categoryIndex >= 0 && categoryIndex < EmojiCatalog.categories.count {
-            current = EmojiCatalog.categories[categoryIndex].emojis
+            next = EmojiCatalog.categories[categoryIndex].emojis
         }
+        // Rehacer la cuadrícula de 1.900 celdas cuando no cambió nada era otro
+        // motivo de tirón al abrir el panel.
+        if next == current && !current.isEmpty {
+            highlightCategory()
+            return
+        }
+        current = next
         collection.reloadData()
         collection.setContentOffset(.zero, animated: false)
         highlightCategory()
