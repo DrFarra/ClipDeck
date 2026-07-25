@@ -6,6 +6,23 @@ import SwiftData
 
 final class FeedbackHostView: UIInputView, UIInputViewAudioFeedback {
     var enableInputClicksWhenVisible: Bool { true }
+
+    /// Zonas que se quedan el toque pase lo que pase por encima.
+    ///
+    /// Los iconos de portapapeles y emoji fallaban en unas posiciones sí y en
+    /// otras no: algo por delante les robaba el toque. En vez de seguir
+    /// adivinando qué vista era, el reparto se decide aquí, en la raíz, antes
+    /// de mirar ninguna otra vista: si el dedo cae en la esquina, va al icono.
+    var priorityTargets: [(rect: CGRect, view: UIView)] = []
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard self.point(inside: point, with: event) else { return super.hitTest(point, with: event) }
+        for target in priorityTargets
+        where !target.view.isHidden && target.view.isUserInteractionEnabled && target.rect.contains(point) {
+            return target.view
+        }
+        return super.hitTest(point, with: event)
+    }
 }
 
 // MARK: - Especificación de tecla
@@ -142,6 +159,8 @@ final class KeyboardViewController: UIInputViewController {
             panel.backToKeys = { [weak self] in self?.mode = .keys; self?.refreshMode() }
             panel.deleteDown = { [weak self] in self?.backspaceDown() }
             panel.deleteUp = { [weak self] in self?.backspaceUp() }
+            panel.onLongPressFeedback = { [weak self] in self?.longPressFeedback() }
+            panel.onSelectionFeedback = { [weak self] in self?.selectionFeedback() }
             panel.frame = self.keyboardArea.frame
             panel.isHidden = true
             self.root.addSubview(panel)
@@ -292,6 +311,10 @@ final class KeyboardViewController: UIInputViewController {
         let btn: CGFloat = 52
         clipboardButton.frame = CGRect(x: 0, y: 0, width: btn, height: topH)
         emojiButton.frame = CGRect(x: W - btn, y: 0, width: btn, height: topH)
+        root.priorityTargets = [
+            (CGRect(x: 0, y: 0, width: btn, height: topH), clipboardButton),
+            (CGRect(x: W - btn, y: 0, width: btn, height: topH), emojiButton)
+        ]
         let sugX = clipboardButton.frame.maxX + 4
         let sugTotal = max(emojiButton.frame.minX - 4 - sugX, 0)
         let sugW = sugTotal / 3
@@ -1148,6 +1171,8 @@ final class KeyboardViewController: UIInputViewController {
             panel.backToKeys = { [weak self] in self?.mode = .keys; self?.refreshMode() }
             panel.deleteDown = { [weak self] in self?.backspaceDown() }
             panel.deleteUp = { [weak self] in self?.backspaceUp() }
+            panel.onLongPressFeedback = { [weak self] in self?.longPressFeedback() }
+            panel.onSelectionFeedback = { [weak self] in self?.selectionFeedback() }
             root.addSubview(panel)
             emojiPanel = panel
         }
@@ -1896,6 +1921,7 @@ final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionView
 
         let lp = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         lp.minimumPressDuration = 0.35
+        lp.allowableMovement = 30      // permite arrastrar hasta la barra de tonos
         collection.addGestureRecognizer(lp)
 
         bottomBar.backgroundColor = .clear
@@ -1979,11 +2005,9 @@ final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionView
 
     // Aplica el tono guardado a un emoji base (si lo tiene).
     private func displayed(_ base: String) -> String {
-        guard EmojiCatalog.skinToneBase.contains(base) else { return base }
+        guard let variants = EmojiCatalog.toneVariants[base] else { return base }
         let dict = UserDefaults.standard.dictionary(forKey: tonesKey) as? [String: Int] ?? [:]
-        if let i = dict[base], i >= 0, i < EmojiCatalog.skinTones.count {
-            return base + EmojiCatalog.skinTones[i]
-        }
+        if let i = dict[base], variants.indices.contains(i) { return variants[i] }
         return base
     }
 
@@ -2018,85 +2042,131 @@ final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionView
         reloadCurrent()
     }
 
-    // MARK: Tonos de piel (mantener pulsado)
+    // MARK: Tonos de piel
+    //
+    // Misma mecánica que el globo de acentos de las teclas: mantienes pulsado,
+    // aparece la barra, arrastras sin levantar el dedo y al soltar se inserta
+    // la opción marcada. Antes era un popup de botones que había que tocar
+    // aparte, y encima componía el tono pegando el modificador al final, cosa
+    // que sólo funciona en los emojis simples: en las secuencias con ZWJ
+    // (🧑‍🍳, 👩‍❤️‍👨…) el modificador va detrás de la persona, no al final. Ahora
+    // las variantes salen del catálogo de Unicode ya construidas.
+
+    /// Vibración al abrir el selector y al pasar de un tono a otro. Las pone el
+    /// controlador para respetar el ajuste de vibración en pulsación larga.
+    var onLongPressFeedback: (() -> Void)?
+    var onSelectionFeedback: (() -> Void)?
+
+    private var toneBase: String?
+    private var toneOptions: [String] = []
+    private var toneLabels: [UILabel] = []
+    private var toneBarFrame: CGRect = .zero
+    private var toneIndex = 0
+    private let toneCellWidth: CGFloat = 42
 
     @objc private func handleLongPress(_ gr: UILongPressGestureRecognizer) {
-        guard gr.state == .began else { return }
-        let pt = gr.location(in: collection)
-        guard let ip = collection.indexPathForItem(at: pt) else { return }
-        let base = current[ip.item]
-        guard EmojiCatalog.skinToneBase.contains(base),
-              let cell = collection.cellForItem(at: ip) else { return }
-        showTonePopup(base: base, over: cell)
+        switch gr.state {
+        case .began:
+            let pt = gr.location(in: collection)
+            guard let ip = collection.indexPathForItem(at: pt) else { return }
+            let base = current[ip.item]
+            guard let variants = EmojiCatalog.toneVariants[base],
+                  let cell = collection.cellForItem(at: ip) else { return }
+            openTonePicker(base: base, variants: variants, over: cell)
+        case .changed:
+            guard tonePopup != nil else { return }
+            updateToneSelection(at: gr.location(in: self).x)
+        case .ended:
+            guard tonePopup != nil else { return }
+            commitTone()
+        default:
+            closeTonePicker()
+        }
     }
 
-    private func showTonePopup(base: String, over cell: UICollectionViewCell) {
-        dismissTonePopup()
-        let options = [base] + EmojiCatalog.skinTones.map { base + $0 }  // amarillo + 5 tonos
-        let cellW: CGFloat = 40
-        let w = CGFloat(options.count) * cellW + 8
-        let h: CGFloat = 46
+    private func openTonePicker(base: String, variants: [String], over cell: UICollectionViewCell) {
+        closeTonePicker()
+        collection.isScrollEnabled = false      // el dedo elige, no desplaza
+        toneBase = base
+        toneOptions = [base] + variants
+
+        let w = CGFloat(toneOptions.count) * toneCellWidth + 8
+        let h: CGFloat = 50
         let cf = cell.convert(cell.bounds, to: self)
         var x = cf.midX - w / 2
-        x = min(max(x, 4), bounds.width - w - 4)
+        x = min(max(x, 4), max(bounds.width - w - 4, 4))
         let y = max(cf.minY - h - 4, 2)
         let bar = UIView(frame: CGRect(x: x, y: y, width: w, height: h))
         bar.backgroundColor = .systemGray4
-        bar.layer.cornerRadius = 10
+        bar.layer.cornerRadius = 12
         bar.layer.shadowColor = UIColor.black.cgColor
         bar.layer.shadowOpacity = 0.25
         bar.layer.shadowRadius = 5
         bar.layer.shadowOffset = CGSize(width: 0, height: 2)
         addSubview(bar)
 
-        for (i, opt) in options.enumerated() {
-            let btn = UIButton(type: .system)
-            btn.setTitle(opt, for: .normal)
-            btn.titleLabel?.font = .systemFont(ofSize: 26)
-            btn.frame = CGRect(x: 4 + CGFloat(i) * cellW, y: 4, width: cellW, height: h - 8)
-            btn.tag = i        // 0 = amarillo, 1...5 = tono i-1
-            btn.addTarget(self, action: #selector(pickTone(_:)), for: .touchDown)
-            bar.addSubview(btn)
+        toneLabels = []
+        for (i, opt) in toneOptions.enumerated() {
+            let l = UILabel(frame: CGRect(x: 4 + CGFloat(i) * toneCellWidth, y: 5,
+                                          width: toneCellWidth, height: h - 10))
+            l.text = opt
+            l.textAlignment = .center
+            l.font = .systemFont(ofSize: 28)
+            l.layer.cornerRadius = 8
+            l.clipsToBounds = true
+            bar.addSubview(l)
+            toneLabels.append(l)
         }
         tonePopup = bar
-        // objeto base guardado para el handler
-        objc_setAssociatedObject(bar, &EmojiPanelView.baseKey, base, .OBJC_ASSOCIATION_RETAIN)
+        toneBarFrame = bar.frame
+
+        // Arranca marcando el tono que ya tenías elegido para ese emoji.
+        let saved = UserDefaults.standard.dictionary(forKey: tonesKey) as? [String: Int] ?? [:]
+        var start = 0
+        if let i = saved[base], i >= 0, i < variants.count { start = i + 1 }
+        toneIndex = start
+        highlightTone()
+        onLongPressFeedback?()
     }
 
-    private static var baseKey: UInt8 = 0
+    private func updateToneSelection(at x: CGFloat) {
+        guard !toneOptions.isEmpty else { return }
+        let slot = Int(floor((x - toneBarFrame.minX - 4) / toneCellWidth))
+        let clamped = min(max(slot, 0), toneOptions.count - 1)
+        guard clamped != toneIndex else { return }
+        toneIndex = clamped
+        highlightTone()
+        onSelectionFeedback?()
+    }
 
-    @objc private func pickTone(_ sender: UIButton) {
-        guard let bar = tonePopup,
-              let base = objc_getAssociatedObject(bar, &EmojiPanelView.baseKey) as? String else { return }
-        var dict = UserDefaults.standard.dictionary(forKey: tonesKey) as? [String: Int] ?? [:]
-        let result: String
-        if sender.tag == 0 {
-            dict[base] = nil            // amarillo por defecto
-            result = base
-        } else {
-            let idx = sender.tag - 1
-            dict[base] = idx
-            result = base + EmojiCatalog.skinTones[idx]
+    private func highlightTone() {
+        for (i, l) in toneLabels.enumerated() {
+            l.backgroundColor = i == toneIndex ? UIColor.tintColor : .clear
         }
+    }
+
+    private func commitTone() {
+        guard let base = toneBase, toneOptions.indices.contains(toneIndex) else {
+            closeTonePicker()
+            return
+        }
+        let result = toneOptions[toneIndex]
+        var dict = UserDefaults.standard.dictionary(forKey: tonesKey) as? [String: Int] ?? [:]
+        if toneIndex == 0 { dict[base] = nil } else { dict[base] = toneIndex - 1 }
         UserDefaults.standard.set(dict, forKey: tonesKey)
-        dismissTonePopup()
+        closeTonePicker()
         insert?(result)
         EmojiStore.registerRecent(result)
         collection.reloadData()
     }
 
-    private func dismissTonePopup() {
+    private func closeTonePicker() {
         tonePopup?.removeFromSuperview()
         tonePopup = nil
-    }
-
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        // Si hay popup abierto y se toca fuera, ciérralo.
-        if let bar = tonePopup {
-            let inBar = bar.frame.contains(point)
-            if !inBar { dismissTonePopup() }
-        }
-        return super.hitTest(point, with: event)
+        toneLabels = []
+        toneOptions = []
+        toneBase = nil
+        collection.isScrollEnabled = true
     }
 }
 
@@ -2138,30 +2208,44 @@ final class IconTouchButton: UIView {
         backgroundColor = active ? UIColor.tintColor.withAlphaComponent(0.22) : .clear
     }
 
-    /// Dispara la acción, evitando sólo el doble disparo inmediato.
+    /// Dispara la acción con un destello bien visible.
     ///
-    /// Antes había un `isDown` que bloqueaba la siguiente pulsación: si el
-    /// toque se perdía (abrir el panel añade vistas en pleno toque y UIKit
-    /// puede no entregar el final), el botón quedaba muerto para siempre.
+    /// El destello no es adorno: si el botón vuelve a fallar, sirve para saber
+    /// si el toque llegó (destella pero no abre) o no llegó (no destella).
     func fire() {
         let now = CACurrentMediaTime()
         guard now - lastFire > 0.25 else { return }
         lastFire = now
-        alpha = 0.5
-        UIView.animate(withDuration: 0.12) { self.alpha = 1 }
+        flash()
         onTap?()
     }
 
+    private func flash() {
+        let normal = backgroundColor
+        backgroundColor = UIColor.systemGray2
+        UIView.animate(withDuration: 0.22) { self.backgroundColor = normal }
+    }
+
+    private func setDown(_ down: Bool) {
+        alpha = down ? 0.55 : 1
+    }
+
+    // Se marca al apoyar y se ejecuta al soltar. Ejecutarlo al apoyar era peor:
+    // abrir el panel añade vistas en pleno toque y UIKit deja de entregar el
+    // final del toque, que era justo lo que dejaba el botón bloqueado.
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        fire()
+        setDown(true)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        alpha = 1
+        setDown(false)
+        guard let t = touches.first else { fire(); return }
+        let p = t.location(in: self)
+        if bounds.insetBy(dx: -20, dy: -14).contains(p) { fire() }
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        alpha = 1
+        setDown(false)
     }
 }
 
