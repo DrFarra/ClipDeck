@@ -65,6 +65,16 @@ final class KeyboardViewController: UIInputViewController {
     private var swipePitch: CGFloat = 40
     private var swipeStartChar = ""
     private var swipeToken = 0
+    private var swipeKeySize: CGSize = .zero
+
+    // Modelo de toque: dónde cae el dedo en cada tecla.
+    private var wordTouches: [CGPoint] = []
+    private var lastTypedLetter: Character?
+    private var lastTypedPoint: CGPoint?
+    private var lastTypedAt: CFTimeInterval = 0
+    private var undoneLetter: Character?
+    private var undonePoint: CGPoint?
+    private var undoneAt: CFTimeInterval = 0
 
     private let haptic = UIImpactFeedbackGenerator(style: .light)
     private let longPressHaptic = UIImpactFeedbackGenerator(style: .medium)
@@ -138,7 +148,7 @@ final class KeyboardViewController: UIInputViewController {
     /// Carga el vocabulario de deslizamiento en segundo plano: leerlo en el
     /// hilo principal congelaría la apertura del teclado.
     private func prepareSwipe() {
-        guard config.swipe else { return }
+        guard config.swipe || config.smartCorrect else { return }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             SwipeLexicon.shared.load()
             let ready = SwipeLexicon.shared.isLoaded
@@ -187,6 +197,13 @@ final class KeyboardViewController: UIInputViewController {
         }
         updateShiftFromContext()
         if mode == .keys { showKeyboard() }
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        // Guardar lo aprendido antes de que el sistema descargue el teclado.
+        WordLearner.flush()
+        TouchModel.flush()
     }
 
     override func viewDidLayoutSubviews() {
@@ -447,16 +464,99 @@ final class KeyboardViewController: UIInputViewController {
         selectionHaptic.prepare()
     }
 
-    func insertChar(_ base: String) {
+    @discardableResult
+    func insertChar(_ base: String, at point: CGPoint? = nil) -> String {
         keyFeedback()
+        var value = base
+        if let point, base.count == 1, base.first?.isLetter == true, !symbolsMode {
+            value = resolveLetter(base, at: point)
+        }
         let upper = shift != .off && !symbolsMode
-        textDocumentProxy.insertText(upper ? base.uppercased() : base)
+        let out = upper ? value.uppercased() : value
+        textDocumentProxy.insertText(out)
+        if let point, let ch = value.lowercased().first, ch.isLetter, !symbolsMode {
+            noteKeyPress(ch, at: point)
+        }
         if shift == .on && !symbolsMode {
             shift = .off
             updateKeyCaps()
         }
         pendingRevert = nil
         scheduleSuggestions()
+        return out
+    }
+
+    // MARK: - Cómo teclea el usuario
+    //
+    // Cada pulsación deja dos cosas: el punto exacto dentro de la palabra que se
+    // está escribiendo (lo usa el corrector para saber si un toque estuvo a
+    // medio camino entre dos teclas) y una muestra del desvío respecto al centro
+    // de esa tecla (lo usa el modelo que mueve las fronteras invisibles).
+
+    private func noteKeyPress(_ letter: Character, at point: CGPoint) {
+        wordTouches.append(point)
+        if swipeCenters.isEmpty { rebuildSwipeGeometry() }
+        let size = swipeKeySize
+        guard size.width > 1, size.height > 1,
+              let idx = SwipeAlphabet.index(letter),
+              let center = swipeCenters[idx] else { return }
+
+        // Señal fuerte: borró una letra y escribió su vecina. Ese toque debía
+        // haber caído en la tecla nueva, así que cuenta por varias muestras.
+        if let previousLetter = undoneLetter, let previousPoint = undonePoint,
+           previousLetter != letter,
+           CACurrentMediaTime() - undoneAt < 3.0,
+           let oldIdx = SwipeAlphabet.index(previousLetter),
+           let oldCenter = swipeCenters[oldIdx],
+           abs(center.y - oldCenter.y) < size.height * 0.6,
+           abs(center.x - oldCenter.x) < size.width * 1.9 {
+            TouchModel.record(letter,
+                              dx: Double((previousPoint.x - center.x) / size.width),
+                              dy: Double((previousPoint.y - center.y) / size.height),
+                              weight: 6)
+        }
+        undoneLetter = nil
+        undonePoint = nil
+
+        TouchModel.record(letter,
+                          dx: Double((point.x - center.x) / size.width),
+                          dy: Double((point.y - center.y) / size.height))
+        lastTypedLetter = letter
+        lastTypedPoint = point
+        lastTypedAt = CACurrentMediaTime()
+    }
+
+    /// Decide qué letra quiso escribir según dónde suele tocar el usuario.
+    ///
+    /// Las teclas no se mueven de sitio: lo que se corre es la frontera
+    /// invisible entre una tecla y su vecina. Sólo actúa cerca del borde, con
+    /// suficientes muestras acumuladas y cuando la vecina gana con holgura.
+    private func resolveLetter(_ base: String, at point: CGPoint) -> String {
+        guard config.adaptiveKeys, TouchModel.totalSamples >= 120 else { return base }
+        guard let ch = base.lowercased().first, let idx = SwipeAlphabet.index(ch) else { return base }
+        if swipeCenters.isEmpty { rebuildSwipeGeometry() }
+        let size = swipeKeySize
+        guard size.width > 1, let pressed = swipeCenters[idx] else { return base }
+        guard abs(point.x - pressed.x) > size.width * 0.26 else { return base }
+
+        let pressedScore = biasedDistance(point, index: idx, center: pressed, size: size)
+        var winner = idx
+        var winnerScore = pressedScore
+        for (other, center) in swipeCenters where other != idx {
+            guard abs(center.y - pressed.y) < size.height * 0.6,
+                  abs(center.x - pressed.x) < size.width * 1.9 else { continue }
+            let d = biasedDistance(point, index: other, center: center, size: size)
+            if d < winnerScore { winnerScore = d; winner = other }
+        }
+        guard winner != idx, winnerScore < pressedScore * 0.82 else { return base }
+        return String(SwipeAlphabet.letters[Int(winner)])
+    }
+
+    private func biasedDistance(_ p: CGPoint, index: UInt8, center: CGPoint, size: CGSize) -> CGFloat {
+        let bias = TouchModel.bias(SwipeAlphabet.letters[Int(index)])
+        let dx = (p.x - (center.x + CGFloat(bias.x) * size.width)) / size.width
+        let dy = (p.y - (center.y + CGFloat(bias.y) * size.height)) / size.height
+        return sqrt(dx * dx + dy * dy)
     }
 
     /// Reemplaza el último carácter insertado por una variante acentuada.
@@ -491,6 +591,14 @@ final class KeyboardViewController: UIInputViewController {
 
     func backspaceDown() {
         keyFeedback()
+        if let l = lastTypedLetter, let p = lastTypedPoint,
+           CACurrentMediaTime() - lastTypedAt < 2.5 {
+            undoneLetter = l
+            undonePoint = p
+            undoneAt = CACurrentMediaTime()
+        }
+        lastTypedLetter = nil
+        if !wordTouches.isEmpty { wordTouches.removeLast() }
         textDocumentProxy.deleteBackward()
         updateShiftFromContext()
         scheduleSuggestions()
@@ -557,6 +665,7 @@ final class KeyboardViewController: UIInputViewController {
 
     func moveCursor(_ offset: Int) {
         textDocumentProxy.adjustTextPosition(byCharacterOffset: offset)
+        wordTouches.removeAll(keepingCapacity: true)
     }
 
     // MARK: - Trackpad
@@ -694,6 +803,7 @@ final class KeyboardViewController: UIInputViewController {
     /// porque va a ser reemplazada por la palabra completa.
     func beginSwipe(startChar: String, from point: CGPoint) {
         guard !swipeActive, swipeEnabled else { return }
+        wordTouches.removeAll(keepingCapacity: true)
         swipeActive = true
         swipeStartChar = startChar
         textDocumentProxy.deleteBackward()
@@ -789,6 +899,7 @@ final class KeyboardViewController: UIInputViewController {
         }
         lastCommittedWord = best
         pendingRevert = nil
+        wordTouches.removeAll(keepingCapacity: true)
         if shift == .on && !symbolsMode { shift = .off; updateKeyCaps() }
 
         // Alternativas a un toque en la barra de sugerencias.
@@ -807,6 +918,7 @@ final class KeyboardViewController: UIInputViewController {
     private func rebuildSwipeGeometry() {
         var centers: [UInt8: CGPoint] = [:]
         var widest: CGFloat = 0
+        var tallest: CGFloat = 0
         for rowView in keyViews {
             for k in rowView.letterKeys() {
                 guard let ch = k.spec.value.lowercased().first,
@@ -814,10 +926,12 @@ final class KeyboardViewController: UIInputViewController {
                 let f = k.convert(k.bounds, to: view)
                 centers[idx] = CGPoint(x: f.midX, y: f.midY)
                 if f.width > widest { widest = f.width }
+                if f.height > tallest { tallest = f.height }
             }
         }
         swipeCenters = centers
         swipePitch = widest > 1 ? widest + 5 : 40
+        swipeKeySize = CGSize(width: max(widest, 1), height: max(tallest, 1))
     }
 
     func returnTap() { commit("\n") }
@@ -845,11 +959,25 @@ final class KeyboardViewController: UIInputViewController {
             lastCommittedWord = word
             let doCorrect = config.autocorrect
             let doLearn = config.learnWords
+            let smart = config.smartCorrect
+            let touches = wordTouches
+            let centers = swipeCenters
+            let keySize = swipeKeySize
+            wordTouches.removeAll(keepingCapacity: true)
 
             // Corrector y aprendizaje en segundo plano; sólo el reemplazo del
             // texto vuelve al hilo principal, y sólo si hace falta.
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let fix = doCorrect ? KeyboardViewController.autocorrection(for: word) : nil
+                var fix: String?
+                if doCorrect {
+                    if smart, SwipeLexicon.shared.isLoaded {
+                        fix = SmartCorrector.correction(for: word, touches: touches,
+                                                        keyCenters: centers, keySize: keySize,
+                                                        previous: previous)
+                    } else {
+                        fix = KeyboardViewController.autocorrection(for: word)
+                    }
+                }
                 let finalWord = fix ?? word
                 if doLearn {
                     WordLearner.learn(finalWord)
@@ -996,6 +1124,7 @@ final class KeyboardViewController: UIInputViewController {
 
     private func applySuggestionWord(_ title: String) {
         keyFeedback()
+        wordTouches.removeAll(keepingCapacity: true)
         if title.hasPrefix("↺ ") {
             undoCorrection(to: String(title.dropFirst(2)))
             return
@@ -1476,9 +1605,11 @@ final class KeyView: UIView {
         setPressed(true)
         switch spec.kind {
         case .char:
-            controller?.insertChar(baseValue)
-            insertedChar = upper ? baseValue.uppercased() : baseValue
-            controller?.showPopup(for: self, text: upper ? baseValue.uppercased() : baseValue)
+            // La letra insertada puede no ser la de la tecla: si el usuario
+            // tiende a tocar corrido, el teclado elige la vecina más probable.
+            let typed = controller?.insertChar(baseValue, at: startPoint) ?? baseValue
+            insertedChar = typed
+            controller?.showPopup(for: self, text: typed)
             if !spec.variants.isEmpty {
                 longTimer?.invalidate()
                 longTimer = KeyboardViewController.commonTimer(0.4) { [weak self] in
