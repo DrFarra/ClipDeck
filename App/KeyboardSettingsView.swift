@@ -10,6 +10,8 @@ struct KeyboardSettingsView: View {
     @State private var dictProgress = 0.0
     @State private var dictCount = SwipeLexicon.builtCount
     @State private var dictComplete = SwipeLexicon.isComplete
+    @State private var touchSamples = Int(TouchModel.totalSamples)
+    @State private var showTouchReset = false
 
     private let punctuationOptions = [",", ".", "?", "!", ":", ";", "-", "'", "@"]
 
@@ -18,6 +20,7 @@ struct KeyboardSettingsView: View {
             designSection
             punctuationSection
             writingSection
+            adaptiveSection
             swipeSection
             trackpadSection
             feedbackSection
@@ -27,6 +30,15 @@ struct KeyboardSettingsView: View {
         .navigationTitle("Teclado")
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: config) { save() }
+        .confirmationDialog("¿Olvidar cómo escribís?",
+                            isPresented: $showTouchReset, titleVisibility: .visible) {
+            Button("Olvidar", role: .destructive) {
+                TouchModel.reset()
+                touchSamples = 0
+            }
+        } message: {
+            Text("Las teclas vuelven a sus fronteras normales y el teclado empieza a estudiarte de cero.")
+        }
         .confirmationDialog("¿Borrar el vocabulario aprendido?",
                             isPresented: $showClearConfirm, titleVisibility: .visible) {
             Button("Borrar", role: .destructive) {
@@ -69,6 +81,17 @@ struct KeyboardSettingsView: View {
             Toggle("Acentos con pulsación larga", isOn: $config.accents)
             Toggle("Doble espacio inserta punto", isOn: $config.doubleSpace)
             Toggle("Mayúsculas automáticas", isOn: $config.autoCapital)
+        }
+    }
+
+    @ViewBuilder private var adaptiveSection: some View {
+        Section("Se adapta a cómo escribís") {
+            Toggle("Corrector inteligente", isOn: $config.smartCorrect)
+            Toggle("Ajustar teclas a mi pulsación", isOn: $config.adaptiveKeys)
+            LabeledContent("Pulsaciones estudiadas", value: "\(touchSamples)")
+            Button("Olvidar cómo escribo", role: .destructive) { showTouchReset = true }
+            Text("El teclado anota a qué altura y a qué lado de cada tecla cae tu dedo, y corre las fronteras invisibles entre teclas sin moverlas de sitio. El corrector usa esos mismos datos: sabe si un toque quedó a medio camino entre dos letras, qué teclas están pegadas, tus palabras y cuál sueles escribir después de cuál. Todo se calcula y se guarda solo en tu iPhone.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -187,6 +210,8 @@ struct KeyboardSettingsView: View {
         store.set(config.sound, forKey: KbPrefs.sound)
         store.set(config.hapticsLongPress, forKey: KbPrefs.hapticsLongPress)
         store.set(config.swipe, forKey: KbPrefs.swipe)
+        store.set(config.adaptiveKeys, forKey: KbPrefs.adaptiveKeys)
+        store.set(config.smartCorrect, forKey: KbPrefs.smartCorrect)
         store.set(config.trackpadStepY, forKey: KbPrefs.trackpadStepY)
         store.set(config.trackpadChars, forKey: KbPrefs.trackpadChars)
         store.set(config.punctLeft, forKey: KbPrefs.punctLeft)
