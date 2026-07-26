@@ -22,6 +22,8 @@ enum KbPrefs {
     static let haptics         = "kb.haptics"
     static let hapticsLongPress = "kb.hapticsLongPress"
     static let swipe           = "kb.swipeTyping"
+    static let adaptiveKeys    = "kb.adaptiveKeys"     // fronteras que se adaptan
+    static let smartCorrect    = "kb.smartCorrect"     // corrector con geometría
     static let trackpadStepY   = "kb.trackpadLineStep"     // pt por línea
     static let trackpadChars   = "kb.trackpadLineChars"    // ancho de línea estimado
     static let punctLeft       = "kb.punctLeft"
@@ -52,6 +54,8 @@ enum KbPrefs {
         var haptics: Bool
         var hapticsLongPress: Bool
         var swipe: Bool
+        var adaptiveKeys: Bool
+        var smartCorrect: Bool
         var trackpadStepY: Double
         var trackpadChars: Double
         var punctLeft: String
@@ -74,6 +78,8 @@ enum KbPrefs {
                    haptics: KbPrefs.bool(KbPrefs.haptics, default: true),
                    hapticsLongPress: KbPrefs.bool(KbPrefs.hapticsLongPress, default: true),
                    swipe: KbPrefs.bool(KbPrefs.swipe, default: true),
+                   adaptiveKeys: KbPrefs.bool(KbPrefs.adaptiveKeys, default: true),
+                   smartCorrect: KbPrefs.bool(KbPrefs.smartCorrect, default: true),
                    trackpadStepY: KbPrefs.double(KbPrefs.trackpadStepY, default: 22),
                    trackpadChars: KbPrefs.double(KbPrefs.trackpadChars, default: 38),
                    punctLeft: KbPrefs.store.string(forKey: KbPrefs.punctLeft) ?? ",",
