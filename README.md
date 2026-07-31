@@ -59,8 +59,12 @@ Shared/            → modelos SwiftData, captura, OCR, clasificación (comparti
 Keyboard/          → teclado personalizado
 Share/             → extensión de compartir
 Widget/            → widget de pantalla de inicio
+Tests/             → pruebas de la lógica de Shared (corren en el simulador)
 .github/workflows/ → compilación automática del IPA
 ```
+
+Las pruebas se ejecutan solas en cada push, antes de compilar el IPA. Con Mac:
+`xcodebuild test -project ClipDeck.xcodeproj -scheme ClipDeck -destination 'platform=iOS Simulator,name=iPhone 17'`
 
 ## Funciones incluidas
 

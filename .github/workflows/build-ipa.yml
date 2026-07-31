@@ -20,6 +20,23 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Tests (simulador)
+        run: |
+          UDID=$(xcrun simctl list devices available \
+            | grep -m1 'iPhone' \
+            | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}' || true)
+          if [ -z "$UDID" ]; then
+            echo "No hay ningún simulador de iPhone disponible en el runner"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "Simulador: $UDID"
+          xcodebuild test \
+            -project ClipDeck.xcodeproj \
+            -scheme ClipDeck \
+            -destination "id=$UDID" \
+            CODE_SIGNING_ALLOWED=NO
+
       - name: Build (Release, sin firma)
         run: |
           xcodebuild \

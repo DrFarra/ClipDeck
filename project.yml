@@ -128,12 +128,31 @@ targets:
         com.apple.security.application-groups:
           - group.com.emilio.clipdeck
 
+  # Pruebas de la lógica de Shared. No usa app anfitriona: compila las fuentes
+  # de Shared dentro del propio bundle y corre en el simulador.
+  ClipDeckTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests
+      - Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.emilio.clipdeck.tests
+    info:
+      path: Tests/Info.plist
+
 schemes:
   ClipDeck:
     build:
       targets:
         ClipDeck: all
+        ClipDeckTests: [test]
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - ClipDeckTests
     archive:
       config: Release
