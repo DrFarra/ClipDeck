@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 struct OnboardingView: View {
-    @AppStorage(SettingsKeys.hasOnboarded) private var hasOnboarded = false
+    @AppStorage(SettingsKeys.hasOnboarded, store: AppGroup.sharedDefaults) private var hasOnboarded = false
     @Environment(\.openURL) private var openURL
     @State private var page = 0
 

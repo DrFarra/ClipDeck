@@ -7,16 +7,16 @@ struct SettingsView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
 
-    @AppStorage(SettingsKeys.appearance) private var appearance = "system"
-    @AppStorage(SettingsKeys.retentionDays) private var retentionDays = 0
-    @AppStorage(SettingsKeys.capturePaused) private var capturePaused = false
-    @AppStorage(SettingsKeys.moveReusedToTop) private var moveReusedToTop = true
-    @AppStorage(SettingsKeys.confirmDelete) private var confirmDelete = true
-    @AppStorage(SettingsKeys.saveImages) private var saveImages = true
-    @AppStorage(SettingsKeys.ocrEnabled) private var ocrEnabled = true
-    @AppStorage(SettingsKeys.sensitiveDetection) private var sensitiveDetection = true
-    @AppStorage(SettingsKeys.faceIDLock) private var faceIDLock = false
-    @AppStorage(SettingsKeys.blurInSwitcher) private var blurInSwitcher = true
+    @AppStorage(SettingsKeys.appearance, store: AppGroup.sharedDefaults) private var appearance = "system"
+    @AppStorage(SettingsKeys.retentionDays, store: AppGroup.sharedDefaults) private var retentionDays = 0
+    @AppStorage(SettingsKeys.capturePaused, store: AppGroup.sharedDefaults) private var capturePaused = false
+    @AppStorage(SettingsKeys.moveReusedToTop, store: AppGroup.sharedDefaults) private var moveReusedToTop = true
+    @AppStorage(SettingsKeys.confirmDelete, store: AppGroup.sharedDefaults) private var confirmDelete = true
+    @AppStorage(SettingsKeys.saveImages, store: AppGroup.sharedDefaults) private var saveImages = true
+    @AppStorage(SettingsKeys.ocrEnabled, store: AppGroup.sharedDefaults) private var ocrEnabled = true
+    @AppStorage(SettingsKeys.sensitiveDetection, store: AppGroup.sharedDefaults) private var sensitiveDetection = true
+    @AppStorage(SettingsKeys.faceIDLock, store: AppGroup.sharedDefaults) private var faceIDLock = false
+    @AppStorage(SettingsKeys.blurInSwitcher, store: AppGroup.sharedDefaults) private var blurInSwitcher = true
 
     @State private var storageText = "Calculando…"
     @State private var showDeleteAll = false

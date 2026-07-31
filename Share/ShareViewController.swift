@@ -9,6 +9,11 @@ final class ShareViewController: UIViewController {
 
     private let statusLabel = UILabel()
 
+    /// Un solo contenedor para todos los adjuntos: abrir el esquema por cada
+    /// uno es caro y hace que dos guardados simultáneos no vean el hash del otro.
+    /// Sólo se toca desde el hilo principal (ver `save`).
+    private lazy var container = ClipStore.makeContainer()
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
@@ -118,8 +123,7 @@ final class ShareViewController: UIViewController {
     /// Ejecuta una operación de guardado en el hilo principal con un contexto propio.
     private func save(_ operation: @escaping @MainActor (ModelContext) -> Void) {
         let work = {
-            let container = ClipStore.makeContainer()
-            let context = ModelContext(container)
+            let context = ModelContext(self.container)
             MainActor.assumeIsolated {
                 operation(context)
             }

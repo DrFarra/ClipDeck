@@ -27,12 +27,14 @@ enum AppGroup {
         return fallback
     }
 
-    static var sharedDefaults: UserDefaults {
+    /// Instancia única: `KbPrefs` la consulta en cada pulsación de tecla, y
+    /// `UserDefaults(suiteName:)` construye un objeto nuevo en cada llamada.
+    static let sharedDefaults: UserDefaults = {
         if let id = resolvedID, let defaults = UserDefaults(suiteName: id) {
             return defaults
         }
         return .standard
-    }
+    }()
 }
 
 enum ClipStore {
@@ -52,6 +54,10 @@ enum ClipStore {
 }
 
 /// Claves de ajustes de usuario.
+///
+/// Viven en el App Group, no en `UserDefaults.standard`: dentro de una
+/// extensión `.standard` es un sandbox distinto, así que el teclado y la Share
+/// Extension nunca verían lo que el usuario configuró en la app.
 enum SettingsKeys {
     static let capturePaused        = "settings.capturePaused"
     static let moveReusedToTop      = "settings.moveReusedToTop"
@@ -65,4 +71,26 @@ enum SettingsKeys {
     static let appearance           = "settings.appearance"       // system | light | dark
     static let hasOnboarded         = "settings.hasOnboarded"
     static let lastPasteboardChange = "capture.lastChangeCount"
+
+    private static let migratedFlag = "settings.migratedToAppGroup"
+
+    static let all = [capturePaused, moveReusedToTop, confirmDelete, saveImages,
+                      ocrEnabled, sensitiveDetection, faceIDLock, blurInSwitcher,
+                      retentionDays, appearance, hasOnboarded]
+
+    /// Copia una sola vez los ajustes que quedaron en `UserDefaults.standard`
+    /// de la app al App Group. Sólo debe llamarla la app, nunca una extensión.
+    @discardableResult
+    static func migrateToSharedStoreIfNeeded() -> Bool {
+        let shared = AppGroup.sharedDefaults
+        guard shared !== UserDefaults.standard,
+              !shared.bool(forKey: migratedFlag) else { return false }
+        for key in all {
+            if let value = UserDefaults.standard.object(forKey: key) {
+                shared.set(value, forKey: key)
+            }
+        }
+        shared.set(true, forKey: migratedFlag)
+        return true
+    }
 }

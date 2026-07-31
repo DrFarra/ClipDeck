@@ -15,8 +15,8 @@ struct HistoryView: View {
     @Query(sort: \ClipItem.createdAt, order: .reverse) private var allItems: [ClipItem]
     @Query(sort: \Pinboard.sortOrder) private var pinboards: [Pinboard]
 
-    @AppStorage(SettingsKeys.capturePaused) private var capturePaused = false
-    @AppStorage(SettingsKeys.confirmDelete) private var confirmDelete = true
+    @AppStorage(SettingsKeys.capturePaused, store: AppGroup.sharedDefaults) private var capturePaused = false
+    @AppStorage(SettingsKeys.confirmDelete, store: AppGroup.sharedDefaults) private var confirmDelete = true
 
     @State private var source: HistorySource = .clipboard
     @State private var selectionMode = false

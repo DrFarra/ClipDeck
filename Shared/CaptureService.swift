@@ -26,10 +26,10 @@ enum CaptureService {
         guard pasteboard.changeCount != lastCount else { return .empty }
         defaults.set(pasteboard.changeCount, forKey: SettingsKeys.lastPasteboardChange)
 
-        guard !UserDefaults.standard.bool(forKey: SettingsKeys.capturePaused) else { return .ignored }
+        guard !defaults.bool(forKey: SettingsKeys.capturePaused) else { return .ignored }
 
         if pasteboard.hasImages {
-            let saveImages = UserDefaults.standard.object(forKey: SettingsKeys.saveImages) as? Bool ?? true
+            let saveImages = defaults.object(forKey: SettingsKeys.saveImages) as? Bool ?? true
             guard saveImages, let image = pasteboard.image,
                   let data = image.jpegData(compressionQuality: 0.9) else { return .ignored }
             return saveImage(data: data, size: image.size, context: context)
@@ -73,7 +73,7 @@ enum CaptureService {
         let hash = HashService.sha256(trimmed)
         if let existing = findByHash(hash, context: context) {
             existing.lastUsedAt = .now
-            if UserDefaults.standard.object(forKey: SettingsKeys.moveReusedToTop) as? Bool ?? true {
+            if AppGroup.sharedDefaults.object(forKey: SettingsKeys.moveReusedToTop) as? Bool ?? true {
                 existing.createdAt = .now
             }
             try? context.save()
@@ -81,7 +81,7 @@ enum CaptureService {
         }
 
         let type = ContentClassifier.classify(text: trimmed)
-        let sensitiveDetection = UserDefaults.standard.object(forKey: SettingsKeys.sensitiveDetection) as? Bool ?? true
+        let sensitiveDetection = AppGroup.sharedDefaults.object(forKey: SettingsKeys.sensitiveDetection) as? Bool ?? true
         let isSensitive = forcedSensitive || (sensitiveDetection && ContentClassifier.looksSensitive(trimmed))
 
         let item = ClipItem(type: type,
@@ -137,7 +137,7 @@ enum CaptureService {
         updateWidget(context: context)
 
         // OCR en segundo plano
-        if UserDefaults.standard.object(forKey: SettingsKeys.ocrEnabled) as? Bool ?? true {
+        if AppGroup.sharedDefaults.object(forKey: SettingsKeys.ocrEnabled) as? Bool ?? true {
             let itemID = item.id
             Task { @MainActor in
                 let text = await OCRService.recognizeText(in: data)
@@ -196,7 +196,7 @@ enum CaptureService {
     /// Elimina elementos más antiguos que la retención configurada
     /// (excepto favoritos y elementos en pinboards).
     static func purgeExpired(context: ModelContext) {
-        let days = UserDefaults.standard.integer(forKey: SettingsKeys.retentionDays)
+        let days = AppGroup.sharedDefaults.integer(forKey: SettingsKeys.retentionDays)
         guard days > 0 else { return }
         let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: .now) ?? .distantPast
         let descriptor = FetchDescriptor<ClipItem>(predicate: #Predicate { $0.createdAt < cutoff })

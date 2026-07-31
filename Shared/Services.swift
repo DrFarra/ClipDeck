@@ -4,6 +4,7 @@ import UIKit
 import Vision
 import LinkPresentation
 import UniformTypeIdentifiers
+import WidgetKit
 
 // MARK: - Hash
 
@@ -85,5 +86,7 @@ enum WidgetSnapshot {
         defaults.set(lastTitle, forKey: lastTitleKey)
         defaults.set(lastType, forKey: lastTypeKey)
         defaults.set(count, forKey: countKey)
+        // Sin esto el widget sólo se refrescaría con su propia política de 30 min.
+        WidgetCenter.shared.reloadAllTimelines()
     }
 }

@@ -4,13 +4,17 @@ import LocalAuthentication
 
 @main
 struct ClipDeckApp: App {
+    /// Debe ser la primera propiedad: los valores por defecto se evalúan en
+    /// orden de declaración, y los `@AppStorage` de abajo ya leen del App Group.
+    private let didMigrateSettings = SettingsKeys.migrateToSharedStoreIfNeeded()
+
     private let container = ClipStore.makeContainer()
 
     @Environment(\.scenePhase) private var scenePhase
-    @AppStorage(SettingsKeys.hasOnboarded) private var hasOnboarded = false
-    @AppStorage(SettingsKeys.faceIDLock) private var faceIDLock = false
-    @AppStorage(SettingsKeys.blurInSwitcher) private var blurInSwitcher = true
-    @AppStorage(SettingsKeys.appearance) private var appearance = "system"
+    @AppStorage(SettingsKeys.hasOnboarded, store: AppGroup.sharedDefaults) private var hasOnboarded = false
+    @AppStorage(SettingsKeys.faceIDLock, store: AppGroup.sharedDefaults) private var faceIDLock = false
+    @AppStorage(SettingsKeys.blurInSwitcher, store: AppGroup.sharedDefaults) private var blurInSwitcher = true
+    @AppStorage(SettingsKeys.appearance, store: AppGroup.sharedDefaults) private var appearance = "system"
 
     @State private var isLocked = false
     @State private var isObscured = false
