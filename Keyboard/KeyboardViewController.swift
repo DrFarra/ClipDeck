@@ -1080,16 +1080,7 @@ final class KeyboardViewController: UIInputViewController {
         guard let before = textDocumentProxy.documentContextBeforeInput, !before.isEmpty else {
             deleteBack(); return
         }
-        deleteBack(max(Self.lastWordLength(in: before), 1))
-    }
-
-    /// Caracteres que ocupa la última palabra (con los espacios que la siguen).
-    static func lastWordLength(in before: String) -> Int {
-        var chars = Array(before)
-        var count = 0
-        while let last = chars.last, last == " " { chars.removeLast(); count += 1 }
-        while let last = chars.last, last != " ", last != "\n" { chars.removeLast(); count += 1 }
-        return count
+        deleteBack(max(TextRules.lastWordLength(in: before), 1))
     }
 
     func backspaceUp() {
@@ -1114,7 +1105,7 @@ final class KeyboardViewController: UIInputViewController {
             deleteTimer?.invalidate(); deleteTimer = nil
             while steps > swipeDeleted.count {
                 let before = textDocumentProxy.documentContextBeforeInput ?? ""
-                let n = Self.lastWordLength(in: before)
+                let n = TextRules.lastWordLength(in: before)
                 guard n > 0 else { break }
                 swipeDeleted.append(String(before.suffix(n)))
                 deleteBack(n)
@@ -1422,8 +1413,8 @@ final class KeyboardViewController: UIInputViewController {
         // Separación automática con la palabra anterior, como en Gboard (pero
         // no detrás de «¿», «¡», un paréntesis o unas comillas de apertura).
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
-        let previous = Self.lastCompleteWord(in: before)
-        if let last = before.last, !last.isWhitespace, !Self.openingPunctuation.contains(last) {
+        let previous = TextRules.lastCompleteWord(in: before)
+        if let last = before.last, !last.isWhitespace, !TextRules.openingPunctuation.contains(last) {
             put(" ")
         }
         put(word)
@@ -1507,8 +1498,8 @@ final class KeyboardViewController: UIInputViewController {
     private func commit(_ separator: String, feedback: Bool = true) {
         if feedback { keyFeedback() }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
-        let word = Self.wordBefore(before)
-        let previous = Self.previousWord(in: before)
+        let word = TextRules.wordBefore(before)
+        let previous = TextRules.previousWord(in: before)
         pendingRevert = nil
         let swiped = justSwiped
         justSwiped = nil
@@ -1544,7 +1535,7 @@ final class KeyboardViewController: UIInputViewController {
         put(separator)
         updateShiftFromContext()
 
-        let plain = Self.isPlainWord(word)
+        let plain = TextRules.isPlainWord(word)
         let lower = word.lowercased()
         // No se corrige: lo recién escrito deslizando (ya es del vocabulario),
         // lo que el usuario acaba de deshacer ni los nombres de sus contactos.
@@ -1598,11 +1589,7 @@ final class KeyboardViewController: UIInputViewController {
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         // Lo escrito tras la palabra: sólo espacios y signos. Si ya empezó
         // otra palabra o movió el cursor, no se toca nada.
-        let tail = String(before.reversed().prefix { !$0.isLetter && !$0.isNumber }.reversed())
-        guard !tail.isEmpty, tail.count <= 3 else { return }
-        let head = before.dropLast(tail.count)
-        guard head.hasSuffix(original) else { return }
-        if let c = head.dropLast(original.count).last, c.isLetter || c.isNumber { return }
+        guard let tail = TextRules.trailingSeparators(after: original, in: before) else { return }
         deleteBack(original.count + tail.count)
         put(fixed + tail)
         pendingRevert = Revert(original: original, fixed: fixed, tail: tail)
@@ -1658,41 +1645,9 @@ final class KeyboardViewController: UIInputViewController {
         switch textDocumentProxy.autocapitalizationType ?? .sentences {
         case .none: return false
         case .allCharacters: return true
-        case .words: return Self.startsWord(before)
-        default: return Self.startsSentence(before)
+        case .words: return TextRules.startsWord(before)
+        default: return TextRules.startsSentence(before)
         }
-    }
-
-    static let openingPunctuation: Set<Character> = ["¿", "¡", "(", "[", "{", "«", "\"", "'", "“", "‘"]
-    static let closingQuotes: Set<Character> = ["\"", "'", ")", "]", "}", "»", "”", "’"]
-
-    static func startsWord(_ before: String) -> Bool {
-        var text = Substring(before)
-        while let last = text.last, openingPunctuation.contains(last) { text = text.dropLast() }
-        guard let last = text.last else { return true }
-        return last.isWhitespace
-    }
-
-    /// ¿Empieza una frase en el cursor? Hace falta un espacio (o un salto de
-    /// línea) tras el punto: en «www.» o en «juan.» no toca mayúscula, y antes
-    /// salía «www.Google.Com». Los signos de apertura no cuentan: «¿Qué» va
-    /// en mayúscula igual que «Qué».
-    static func startsSentence(_ before: String) -> Bool {
-        var text = Substring(before)
-        while let last = text.last, openingPunctuation.contains(last) { text = text.dropLast() }
-        guard let last = text.last else { return true }
-        if last.isNewline { return true }
-        guard last.isWhitespace else { return false }
-        while let l = text.last, l.isWhitespace, !l.isNewline { text = text.dropLast() }
-        guard var end = text.last else { return true }
-        if end.isNewline { return true }
-        // Comillas o paréntesis de cierre tras el punto: «dijo "hola." Y…»
-        while closingQuotes.contains(end) {
-            text = text.dropLast()
-            guard let l = text.last else { return false }
-            end = l
-        }
-        return ".!?…".contains(end)
     }
 
     // MARK: Sugerencias y corrección
@@ -1735,9 +1690,9 @@ final class KeyboardViewController: UIInputViewController {
     private static func computeSuggestions(before: String, lexicon: [String],
                                            replacements: [String: String],
                                            capitalizeNext: Bool) -> [String] {
-        let word = wordBefore(before)
+        let word = TextRules.wordBefore(before)
         if word.isEmpty || word.rangeOfCharacter(from: .letters) == nil {
-            return nextWords(lastWord: lastCompleteWord(in: before), capitalizeNext: capitalizeNext)
+            return nextWords(lastWord: TextRules.lastCompleteWord(in: before), capitalizeNext: capitalizeNext)
         }
 
         let lower = word.lowercased()
@@ -1750,7 +1705,7 @@ final class KeyboardViewController: UIInputViewController {
         if word.count < 2 {
             // Con una sola letra: lo que suele seguir a la palabra anterior y
             // empieza por esa letra, antes que cualquier otra cosa.
-            let previous = previousWord(in: before)
+            let previous = TextRules.previousWord(in: before)
             if !previous.isEmpty {
                 results += WordLearner.successors(of: previous).filter { $0.hasPrefix(lower) }
             }
@@ -1828,12 +1783,12 @@ final class KeyboardViewController: UIInputViewController {
             return
         }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
-        let current = Self.wordBefore(before)
-        let previous = current.isEmpty ? Self.lastCompleteWord(in: before) : Self.previousWord(in: before)
+        let current = TextRules.wordBefore(before)
+        let previous = current.isEmpty ? TextRules.lastCompleteWord(in: before) : TextRules.previousWord(in: before)
         deleteBack(current.count)
         put(title + " ")
         autoSpaceInserted = true
-        if learningActive, Self.isPlainWord(title) {
+        if learningActive, TextRules.isPlainWord(title) {
             WordLearner.learn(title)
             if !previous.isEmpty { WordLearner.learnBigram(previous: previous, next: title) }
         }
@@ -1986,44 +1941,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func currentWord() -> String {
-        Self.wordBefore(textDocumentProxy.documentContextBeforeInput ?? "")
-    }
-
-    private static let wordSeparators = CharacterSet.whitespacesAndNewlines
-        .union(CharacterSet(charactersIn: ".,;:!?¿¡\"'()[]{}…«»“”‘’"))
-    private static let sentenceEnders: Set<Character> = [".", "!", "?", "…", "\n", "\r", "\r\n"]
-
-    static func isSeparator(_ c: Character) -> Bool {
-        c.unicodeScalars.allSatisfy { wordSeparators.contains($0) }
-    }
-
-    static func wordBefore(_ text: String) -> String {
-        if let r = text.rangeOfCharacter(from: wordSeparators, options: .backwards) {
-            return String(text[r.upperBound...])
-        }
-        return text
-    }
-
-    /// Última palabra completa antes del cursor (para predecir la siguiente),
-    /// sin cruzar el final de una frase.
-    static func lastCompleteWord(in before: String) -> String {
-        var text = Substring(before)
-        while let c = text.last, isSeparator(c) {
-            if sentenceEnders.contains(c) { return "" }
-            text = text.dropLast()
-        }
-        return wordBefore(String(text))
-    }
-
-    /// La palabra anterior a la que se está escribiendo.
-    static func previousWord(in before: String) -> String {
-        let current = wordBefore(before)
-        return lastCompleteWord(in: String(before.dropLast(current.count)))
-    }
-
-    /// Sólo letras: ni correos, ni números, ni «@usuario», ni «c/»…
-    static func isPlainWord(_ word: String) -> Bool {
-        !word.isEmpty && word.allSatisfy { $0.isLetter }
+        TextRules.wordBefore(textDocumentProxy.documentContextBeforeInput ?? "")
     }
 
     // MARK: Paneles (portapapeles en SwiftUI y emojis en UIKit, no críticos para latencia)
@@ -2236,7 +2154,7 @@ final class KeyboardViewController: UIInputViewController {
     /// Lo que se ve: favoritos y búsqueda (sin distinguir tildes ni mayúsculas).
     private func visibleSnapshots() -> [ClipSnapshot] {
         var list = favoritesOnly ? allSnapshots.filter { $0.isFavorite } : allSnapshots
-        let query = Self.fold(clipQuery.trimmingCharacters(in: .whitespaces))
+        let query = TextRules.fold(clipQuery.trimmingCharacters(in: .whitespaces))
         if !query.isEmpty { list = list.filter { $0.searchText.contains(query) } }
         return list
     }
@@ -2313,11 +2231,7 @@ final class KeyboardViewController: UIInputViewController {
                           item.recognizedText, item.fileName]
             parts += fields.compactMap { $0 }.map { String($0.prefix(2000)) }
         }
-        return fold(parts.joined(separator: " "))
-    }
-
-    static func fold(_ text: String) -> String {
-        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+        return TextRules.fold(parts.joined(separator: " "))
     }
 
     private func insertableText(for item: ClipItem) -> String? {

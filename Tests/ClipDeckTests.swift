@@ -161,3 +161,133 @@ final class CaptureRuleTests: XCTestCase {
         }
     }
 }
+
+// MARK: - Reglas de texto del teclado
+
+final class TextRulesTests: XCTestCase {
+
+    func testMayusculaSoloTrasPuntoYEspacio() {
+        XCTAssertTrue(TextRules.startsSentence(""))
+        XCTAssertTrue(TextRules.startsSentence("Hola. "))
+        XCTAssertTrue(TextRules.startsSentence("¿Vienes? "))
+        XCTAssertTrue(TextRules.startsSentence("Hola\n"))
+        XCTAssertFalse(TextRules.startsSentence("Hola "))
+        // Sin espacio tras el punto no hay frase nueva: direcciones y correos.
+        XCTAssertFalse(TextRules.startsSentence("www."))
+        XCTAssertFalse(TextRules.startsSentence("juan."))
+    }
+
+    func testSignosDeAperturaNoCambianLaMayuscula() {
+        XCTAssertTrue(TextRules.startsSentence("¿"))
+        XCTAssertTrue(TextRules.startsSentence("Hola. ¿"))
+        XCTAssertTrue(TextRules.startsSentence("Hola. ¡"))
+        XCTAssertFalse(TextRules.startsSentence("Oye, ¿"))
+        XCTAssertTrue(TextRules.startsSentence("Dijo \"hola.\" "))
+    }
+
+    func testInicioDePalabra() {
+        XCTAssertTrue(TextRules.startsWord(""))
+        XCTAssertTrue(TextRules.startsWord("hola "))
+        XCTAssertTrue(TextRules.startsWord("hola ("))
+        XCTAssertFalse(TextRules.startsWord("hola"))
+    }
+
+    func testPalabraEnCursoYAnterior() {
+        XCTAssertEqual(TextRules.wordBefore("hola que"), "que")
+        XCTAssertEqual(TextRules.wordBefore("¿que"), "que")
+        XCTAssertEqual(TextRules.wordBefore("«hola"), "hola")
+        XCTAssertEqual(TextRules.wordBefore("hola "), "")
+        XCTAssertEqual(TextRules.previousWord(in: "hola que tal"), "que")
+        XCTAssertEqual(TextRules.lastCompleteWord(in: "hola que "), "que")
+    }
+
+    func testNoSeCruzaElFinalDeFrase() {
+        // Tras un punto no hay «palabra anterior»: no se aprende «hola que»
+        // de «Hola. Que».
+        XCTAssertEqual(TextRules.previousWord(in: "Hola. que"), "")
+        XCTAssertEqual(TextRules.lastCompleteWord(in: "Hola. "), "")
+    }
+
+    func testSoloLetrasSeCorrigenYAprenden() {
+        XCTAssertTrue(TextRules.isPlainWord("canción"))
+        XCTAssertFalse(TextRules.isPlainWord("juan@gmail"))
+        XCTAssertFalse(TextRules.isPlainWord("casa1"))
+        XCTAssertFalse(TextRules.isPlainWord(""))
+    }
+
+    func testLargoDeLaUltimaPalabra() {
+        XCTAssertEqual(TextRules.lastWordLength(in: "hola que  "), 5)
+        XCTAssertEqual(TextRules.lastWordLength(in: "hola"), 4)
+        XCTAssertEqual(TextRules.lastWordLength(in: "hola\nque"), 3)
+    }
+
+    func testCorreccionTardiaRespetaLoEscritoDetras() {
+        XCTAssertEqual(TextRules.trailingSeparators(after: "hla", in: "dijo hla "), " ")
+        // Doble espacio rápido: el espacio ya es «. » cuando llega la corrección.
+        XCTAssertEqual(TextRules.trailingSeparators(after: "hla", in: "dijo hla. "), ". ")
+        XCTAssertEqual(TextRules.trailingSeparators(after: "hla", in: "hla?"), "?")
+        // Siguió escribiendo o la palabra era parte de otra: no se toca.
+        XCTAssertNil(TextRules.trailingSeparators(after: "hla", in: "hla d"))
+        XCTAssertNil(TextRules.trailingSeparators(after: "hla", in: "ahla "))
+        XCTAssertNil(TextRules.trailingSeparators(after: "hla", in: "hla"))
+    }
+
+    func testBusquedaSinTildesNiMayusculas() {
+        XCTAssertEqual(TextRules.fold("Canción"), TextRules.fold("cancion"))
+        XCTAssertEqual(TextRules.fold("CANCIÓN"), TextRules.fold("canción"))
+        XCTAssertTrue(TextRules.fold("Mañana en MADRID").contains(TextRules.fold("madrid")))
+    }
+}
+
+// MARK: - Aprendizaje de palabras
+
+final class WordLearnerTests: XCTestCase {
+
+    override func setUp() {
+        super.setUp()
+        WordLearner.clear()
+    }
+
+    override func tearDown() {
+        WordLearner.clear()
+        super.tearDown()
+    }
+
+    func testUnaErrataNoSeDaPorBuenaHastaQueSeRepite() {
+        WordLearner.learn("hopla")
+        XCTAssertFalse(WordLearner.isKnown("hopla"), "un solo uso puede ser una errata")
+        XCTAssertTrue(WordLearner.matches(prefix: "hop", limit: 3).isEmpty)
+
+        WordLearner.learn("hopla")
+        XCTAssertTrue(WordLearner.isKnown("hopla"))
+        XCTAssertEqual(WordLearner.matches(prefix: "hop", limit: 3), ["hopla"])
+    }
+
+    func testCorreccionDeshechaNoSeRepite() {
+        WordLearner.protect("Mordor")
+        XCTAssertTrue(WordLearner.isKnown("mordor"))
+        // Tampoco pasa a proponerse al escribir.
+        XCTAssertTrue(WordLearner.matches(prefix: "mor", limit: 3).isEmpty)
+    }
+}
+
+// MARK: - Vocabulario de deslizamiento
+
+final class SwipeLexiconTests: XCTestCase {
+
+    func testLaInstantaneaEsCoherente() {
+        let lexicon = SwipeLexicon.shared
+        lexicon.invalidate()
+        XCTAssertNil(lexicon.snapshot)
+        lexicon.load()
+        guard let snapshot = lexicon.snapshot else {
+            return XCTFail("debía cargarse al menos el vocabulario de uso diario")
+        }
+        XCTAssertGreaterThan(snapshot.count, 50)
+        XCTAssertEqual(snapshot.lens.count, snapshot.count)
+        XCTAssertEqual(snapshot.starts.count, snapshot.count)
+        XCTAssertEqual(snapshot.masks.count, snapshot.count)
+        XCTAssertEqual(snapshot.priors.count, snapshot.count)
+        XCTAssertEqual(snapshot.flat.count, snapshot.lens.reduce(0) { $0 + Int($1) })
+    }
+}
