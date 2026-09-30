@@ -70,6 +70,100 @@ enum EmojiSupport {
     }
 }
 
+// MARK: - Búsqueda
+
+extension EmojiSearchIndex {
+    /// El de todo el catálogo, sin lo que este iPhone no sabe dibujar. Se
+    /// construye una vez por proceso (ver `prewarm`).
+    static let keyboard = EmojiSearchIndex(data: EmojiCatalog.searchData,
+                                           excluding: EmojiSupport.unsupported)
+
+    /// Leer y trocear los datos lleva unos milisegundos: se hace en segundo
+    /// plano al abrir el panel, antes de que haga falta.
+    static func prewarm() {
+        DispatchQueue.global(qos: .utility).async { _ = EmojiSearchIndex.keyboard }
+    }
+}
+
+/// Fila de resultados de la búsqueda de emojis, entre la barra superior y las
+/// teclas. Con la búsqueda vacía muestra los recientes.
+final class EmojiResultsView: UIView, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
+    var insert: ((String) -> Void)?
+
+    private let layout = UICollectionViewFlowLayout()
+    private var collection: UICollectionView!
+    private let messageLabel = UILabel()
+    private var emojis: [String] = []
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        layout.scrollDirection = .horizontal
+        layout.minimumLineSpacing = 0
+        layout.minimumInteritemSpacing = 0
+        layout.sectionInset = UIEdgeInsets(top: 0, left: 6, bottom: 0, right: 6)
+        collection = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        collection.backgroundColor = .clear
+        collection.showsHorizontalScrollIndicator = false
+        collection.alwaysBounceHorizontal = true
+        collection.dataSource = self
+        collection.delegate = self
+        collection.register(EmojiCell.self, forCellWithReuseIdentifier: "e")
+        addSubview(collection)
+
+        messageLabel.font = .systemFont(ofSize: 15)
+        messageLabel.textAlignment = .center
+        messageLabel.isUserInteractionEnabled = false
+        addSubview(messageLabel)
+        applyTheme()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// `message` se ve cuando no hay nada que enseñar.
+    func show(_ list: [String], message: String?) {
+        let text = list.isEmpty ? message : nil
+        guard list != emojis || text != messageLabel.text else { return }
+        emojis = list
+        collection.reloadData()
+        collection.setContentOffset(.zero, animated: false)
+        collection.isHidden = list.isEmpty
+        messageLabel.text = text
+    }
+
+    func applyTheme() {
+        messageLabel.textColor = KeyStyle.theme.secondaryText
+        for case let cell as EmojiCell in collection.visibleCells {
+            cell.applyTheme()
+        }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if collection.frame != bounds {
+            collection.frame = bounds
+            layout.invalidateLayout()
+        }
+        messageLabel.frame = bounds.insetBy(dx: 16, dy: 0)
+    }
+
+    func collectionView(_ c: UICollectionView, numberOfItemsInSection s: Int) -> Int { emojis.count }
+
+    func collectionView(_ c: UICollectionView, cellForItemAt ip: IndexPath) -> UICollectionViewCell {
+        let cell = c.dequeueReusableCell(withReuseIdentifier: "e", for: ip) as! EmojiCell
+        cell.configure(emojis[ip.item], fontSize: min(floor(bounds.height * 0.64), 30))
+        return cell
+    }
+
+    func collectionView(_ c: UICollectionView, layout: UICollectionViewLayout,
+                        sizeForItemAt ip: IndexPath) -> CGSize {
+        let h = max(bounds.height, 1)
+        return CGSize(width: max(h, 44), height: h)
+    }
+
+    func collectionView(_ c: UICollectionView, didSelectItemAt ip: IndexPath) {
+        insert?(emojis[ip.item])
+    }
+}
+
 // MARK: - Celdas
 
 final class EmojiCell: UICollectionViewCell {
@@ -388,8 +482,9 @@ final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionView
         }
     }
 
-    // Aplica el tono guardado a un emoji base (si lo tiene).
-    private func displayed(_ base: String) -> String {
+    /// Aplica el tono guardado a un emoji base (si lo tiene). También lo usan
+    /// los resultados de la búsqueda.
+    func displayed(_ base: String) -> String {
         guard let i = savedTones[base], let variants = toneVariants(of: base).list,
               variants.indices.contains(i) else { return base }
         return variants[i]

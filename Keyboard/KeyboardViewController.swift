@@ -161,12 +161,16 @@ final class KeyboardViewController: UIInputViewController {
     private var suggestionWork: DispatchWorkItem?
     private var heightConstraint: NSLayoutConstraint?
 
-    // Búsqueda en el portapapeles: mientras se escribe la consulta, las teclas
-    // escriben en ella y no en la app (una extensión de teclado no puede
-    // abrir un teclado para sus propios campos de texto).
-    private var searchingClips = false
+    // Búsqueda en el portapapeles o de emojis: mientras se escribe la
+    // consulta, las teclas escriben en ella y no en la app (una extensión de
+    // teclado no puede abrir un teclado para sus propios campos de texto).
+    private enum SearchTarget { case clips, emoji }
+    private var searchTarget: SearchTarget?
+    private var searching: Bool { searchTarget != nil }
     private var clipQuery = ""
-    private let searchField = ClipSearchFieldView()
+    private var emojiQuery = ""
+    private let searchField = SearchFieldView()
+    private let emojiResults = EmojiResultsView()
 
     // Escritura deslizando
     private var swipeActive = false
@@ -264,6 +268,10 @@ final class KeyboardViewController: UIInputViewController {
         heightConstraint = h
 
         setupTopBar()
+
+        emojiResults.isHidden = true
+        emojiResults.insert = { [weak self] e in self?.insertEmoji(e) }
+        root.addSubview(emojiResults)
 
         keyboardArea.clipsToBounds = false
         keyboardArea.isMultipleTouchEnabled = true
@@ -408,7 +416,7 @@ final class KeyboardViewController: UIInputViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         stopAutoCapture()
-        if searchingClips { endClipSearch(showResults: false) }
+        if searching { endSearch(then: .keys) }
         // Guardar lo aprendido antes de que el sistema descargue el teclado.
         WordLearner.flush()
         TouchModel.flush()
@@ -428,6 +436,7 @@ final class KeyboardViewController: UIInputViewController {
         allSnapshots = []
         thumbnails = [:]
         clipQuery = ""
+        emojiQuery = ""
         if mode == .clipboard { mode = .keys; refreshMode() }
     }
 
@@ -436,7 +445,7 @@ final class KeyboardViewController: UIInputViewController {
         updateHeight()
         // `needsInputModeSwitchKey` no es fiable hasta que el teclado conecta
         // con la app: si cambia, se rehacen las teclas.
-        if !searchingClips, layoutKey() != builtLayoutKey { rebuildKeys() }
+        if !searching, layoutKey() != builtLayoutKey { rebuildKeys() }
     }
 
     override func viewDidLayoutSubviews() {
@@ -456,8 +465,14 @@ final class KeyboardViewController: UIInputViewController {
 
     private func desiredHeight() -> CGFloat {
         let chosen = CGFloat(config.height)
-        guard isCompactHeight else { return chosen }
-        return max(160, min(chosen * 0.62, 215))
+        guard isCompactHeight else { return chosen + emojiResultsHeight }
+        return max(160, min(chosen * 0.62, 215)) + emojiResultsHeight
+    }
+
+    /// La fila de resultados de la búsqueda de emojis se suma a la altura: las
+    /// teclas no encogen mientras se busca.
+    private var emojiResultsHeight: CGFloat {
+        searchTarget == .emoji ? (isCompactHeight ? 38 : 46) : 0
     }
 
     private func updateHeight() {
@@ -470,7 +485,7 @@ final class KeyboardViewController: UIInputViewController {
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
         applyInputTraits()
-        guard !searchingClips else { return }
+        guard !searching else { return }
         let signature = contextSignature()
         // Es el eco de algo que escribimos nosotros: nada que hacer.
         guard signature != ownContext else { return }
@@ -574,7 +589,7 @@ final class KeyboardViewController: UIInputViewController {
         case .system: style = proxy.keyboardAppearance == .dark ? .dark : .unspecified
         }
         if overrideUserInterfaceStyle != style { overrideUserInterfaceStyle = style }
-        guard !searchingClips else { return }
+        guard !searching else { return }
 
         // Campo nuevo: lo elegido en el anterior deja de valer, y lo que
         // estuviera pendiente (una corrección, sugerencias) no debe caer en él.
@@ -614,7 +629,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func punctuationKeys() -> (left: String, right: String) {
-        if searchingClips { return (config.punctLeft, config.punctRight) }
+        if searching { return (config.punctLeft, config.punctRight) }
         switch textDocumentProxy.keyboardType ?? .default {
         case .emailAddress: return ("@", ".")
         case .URL: return ("/", ".")
@@ -625,7 +640,11 @@ final class KeyboardViewController: UIInputViewController {
 
     /// Nombre de la tecla de retorno según el campo ("" = ↵ normal).
     private func returnKeyStyle() -> (title: String, accent: Bool) {
-        if searchingClips { return ("Buscar", true) }
+        switch searchTarget {
+        case .clips: return ("Buscar", true)
+        case .emoji: return ("OK", true)
+        case nil: break
+        }
         switch textDocumentProxy.returnKeyType ?? .default {
         case .go: return ("Ir", true)
         case .google, .search, .yahoo: return ("Buscar", true)
@@ -655,6 +674,7 @@ final class KeyboardViewController: UIInputViewController {
         suggestionButtons.forEach { $0.applyTheme() }
         pasteChip.applyTheme()
         searchField.applyTheme()
+        emojiResults.applyTheme()
         emojiPanel?.applyTheme()
         updateTopIcons()
     }
@@ -697,9 +717,10 @@ final class KeyboardViewController: UIInputViewController {
         searchField.onClear = { [weak self] in
             guard let self else { return }
             self.keyFeedback()
-            self.clipQuery = ""
+            self.activeQuery = ""
             self.updateSearchField()
         }
+        searchField.onTap = { [weak self] in self?.beginEmojiSearch() }
         topBar.addSubview(searchField)
     }
 
@@ -866,10 +887,15 @@ final class KeyboardViewController: UIInputViewController {
             sep.frame = CGRect(x: sugX + CGFloat(i + 1) * sugW - 0.5, y: topH / 2 - 10, width: 1, height: 20)
         }
         pasteChip.frame = CGRect(x: sugX, y: 0, width: sugTotal, height: topH)
-        searchField.frame = CGRect(x: sugX, y: 4, width: max(W - sugX - edge, 0), height: topH - 8)
+        // Mientras se escribe ocupa también el sitio del icono de emojis; en el
+        // panel de emojis, sin escribir, es la lupa entre los dos iconos.
+        let fieldRight = searching ? W - edge : emojiButton.frame.minX - 6
+        searchField.frame = CGRect(x: sugX, y: 4, width: max(fieldRight - sugX, 0), height: topH - 8)
 
-        let areaY = topH
-        let areaH = H - topH
+        let resultsH = emojiResultsHeight
+        emojiResults.frame = CGRect(x: 0, y: topH, width: W, height: resultsH)
+        let areaY = topH + resultsH
+        let areaH = H - areaY
         keyboardArea.frame = CGRect(x: 0, y: areaY, width: W, height: areaH)
         // Al girar el iPhone las teclas cambian de sitio: los centros guardados
         // para el deslizamiento y el modelo de toque ya no valen.
@@ -1013,19 +1039,19 @@ final class KeyboardViewController: UIInputViewController {
         // Los signos que cierran palabra desde la capa de símbolos pasan por
         // el mismo camino que la coma y el punto: corrigen y aprenden la
         // palabra anterior («que tal?» corregía «tal» sólo con el punto).
-        if symbolsMode, numPad == nil, !searchingClips, Self.closingPunctuation.contains(base) {
+        if symbolsMode, numPad == nil, !searching, Self.closingPunctuation.contains(base) {
             punctTap(base)
             return base
         }
         keyFeedback()
         autoSpaceInserted = false
         var value = base
-        if let point, numPad == nil, !searchingClips, base.count == 1, base.first?.isLetter == true, !symbolsMode {
+        if let point, numPad == nil, !searching, base.count == 1, base.first?.isLetter == true, !symbolsMode {
             value = resolveLetter(base, at: point)
         }
         let upper = shift != .off && !symbolsMode
         let out = upper ? value.uppercased() : value
-        if searchingClips {
+        if searching {
             appendToQuery(out)
         } else {
             put(out)
@@ -1035,13 +1061,13 @@ final class KeyboardViewController: UIInputViewController {
         }
         if shift == .on && !symbolsMode {
             // En los campos «todo en mayúsculas» la mayúscula se queda puesta.
-            shift = (!searchingClips && textDocumentProxy.autocapitalizationType == .allCharacters
+            shift = (!searching && textDocumentProxy.autocapitalizationType == .allCharacters
                      && config.autoCapital && !fieldIsLiteral) ? .on : .off
             shiftByUser = false
             updateKeyCaps()
         }
         pendingRevert = nil
-        if !searchingClips { scheduleSuggestions() }
+        if !searching { scheduleSuggestions() }
         return out
     }
 
@@ -1122,8 +1148,8 @@ final class KeyboardViewController: UIInputViewController {
 
     /// Reemplaza el último carácter insertado por una variante acentuada.
     func replaceLastWithVariant(_ variant: String) {
-        if searchingClips {
-            if !clipQuery.isEmpty { clipQuery.removeLast() }
+        if searching {
+            if !activeQuery.isEmpty { activeQuery.removeLast() }
             appendToQuery(variant)
             return
         }
@@ -1165,8 +1191,8 @@ final class KeyboardViewController: UIInputViewController {
         deleteTimer?.invalidate()
         deleteTimer = Self.commonTimer(0.45) { [weak self] in self?.scheduleNextDelete() }
 
-        if searchingClips {
-            if !clipQuery.isEmpty { clipQuery.removeLast(); updateSearchField() }
+        if searching {
+            deleteFromQuery()
             return
         }
         // Como en Gboard: borrar justo después de una autocorrección la
@@ -1193,8 +1219,8 @@ final class KeyboardViewController: UIInputViewController {
         let interval: TimeInterval = deleteRepeats < 8 ? 0.11 : (deleteRepeats < 18 ? 0.06 : 0.035)
         deleteTimer = Self.commonTimer(interval) { [weak self] in
             guard let self else { return }
-            if self.searchingClips {
-                if !self.clipQuery.isEmpty { self.clipQuery.removeLast(); self.updateSearchField() }
+            if self.searching {
+                self.deleteFromQuery()
             } else {
                 if self.deleteRepeats > 26 { self.deleteWord() } else { self.deleteBack() }
                 self.wordTouches.removeAll(keepingCapacity: true)
@@ -1215,7 +1241,7 @@ final class KeyboardViewController: UIInputViewController {
         deleteTimer?.invalidate()
         deleteTimer = nil
         deleteRepeats = 0
-        guard !searchingClips else { return }
+        guard !searching else { return }
         updateShiftFromContext()
         scheduleSuggestions()
     }
@@ -1228,7 +1254,7 @@ final class KeyboardViewController: UIInputViewController {
     private var swipeDeleted: [String] = []
 
     func backspaceDrag(steps: Int) {
-        guard !searchingClips else { return }
+        guard !searching else { return }
         if steps > swipeDeleted.count {
             deleteTimer?.invalidate(); deleteTimer = nil
             while steps > swipeDeleted.count {
@@ -1265,13 +1291,13 @@ final class KeyboardViewController: UIInputViewController {
             symbolsMode.toggle()
         }
         rebuildKeys()
-        if numPad == nil && !symbolsMode && !searchingClips { updateShiftFromContext() }
+        if numPad == nil && !symbolsMode && !searching { updateShiftFromContext() }
     }
 
     func switchKeyboard() { advanceToNextInputMode() }
 
     func spaceTap() {
-        if searchingClips { keyFeedback(); appendToQuery(" "); return }
+        if searching { keyFeedback(); appendToQuery(" "); return }
         let now = Date()
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         if config.doubleSpace,
@@ -1322,7 +1348,7 @@ final class KeyboardViewController: UIInputViewController {
     /// Entra en modo trackpad: las teclas se apagan y toda el área del teclado
     /// pasa a mover el cursor, igual que al mantener el espacio en iOS.
     func enterTrackpad(at point: CGPoint) {
-        guard config.trackpad, !trackpadActive, !searchingClips else { return }
+        guard config.trackpad, !trackpadActive, !searching else { return }
         trackpadActive = true
         trackpadMoved = false
         trackpadLastPoint = point
@@ -1454,7 +1480,7 @@ final class KeyboardViewController: UIInputViewController {
     /// Sólo con el diccionario ya cargado, en el teclado de letras y fuera del
     /// modo trackpad.
     var swipeEnabled: Bool {
-        config.swipe && swipeReady && !symbolsMode && !trackpadActive && numPad == nil && !searchingClips
+        config.swipe && swipeReady && !symbolsMode && !trackpadActive && numPad == nil && !searching
     }
 
     /// Empieza un trazo. La letra que se insertó al tocar la tecla se retira,
@@ -1597,14 +1623,20 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     func returnTap() {
-        if searchingClips { keyFeedback(); endClipSearch(showResults: true); return }
+        if let target = searchTarget {
+            keyFeedback()
+            // «Buscar» enseña lo encontrado en el portapapeles; «OK» deja la
+            // búsqueda de emojis y vuelve a las letras.
+            endSearch(then: target == .clips ? .clipboard : .keys)
+            return
+        }
         commit("\n")
     }
 
     /// `feedback: false` cuando la tecla ya vibró al apoyar el dedo (los
     /// signos con pulsación larga se escriben al soltar).
     func punctTap(_ ch: String, feedback: Bool = true) {
-        if searchingClips {
+        if searching {
             if feedback { keyFeedback() }
             appendToQuery(ch)
             return
@@ -1616,7 +1648,7 @@ final class KeyboardViewController: UIInputViewController {
     /// no gasta la mayúscula de inicio de frase.
     func insertSymbol(_ symbol: String, feedback: Bool = true) {
         if feedback { keyFeedback() }
-        if searchingClips { appendToQuery(symbol); return }
+        if searching { appendToQuery(symbol); return }
         autoSpaceInserted = false
         pendingRevert = nil
         justSwiped = nil
@@ -1716,7 +1748,7 @@ final class KeyboardViewController: UIInputViewController {
     /// escrito después. Antes sólo se aceptaba el separador exacto: un doble
     /// espacio rápido tras una errata dejaba la palabra sin corregir.
     private func applyCorrection(original: String, fixed: String) {
-        guard !searchingClips else { return }
+        guard !searching else { return }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         // Lo escrito tras la palabra: sólo espacios y signos. Si ya empezó
         // otra palabra o movió el cursor, no se toca nada.
@@ -1763,7 +1795,7 @@ final class KeyboardViewController: UIInputViewController {
     /// Decide la mayúscula según lo que pide el campo y el texto previo.
     /// Con `respectManual` no se quita una mayúscula que puso el usuario.
     private func updateShiftFromContext(respectManual: Bool = false) {
-        guard shift != .caps, !searchingClips else { return }
+        guard shift != .caps, !searching else { return }
         if respectManual && shiftByUser && shift == .on { return }
         let newShift: ShiftState = contextWantsCapital() ? .on : .off
         shiftByUser = false
@@ -1797,7 +1829,7 @@ final class KeyboardViewController: UIInputViewController {
     /// Programa el cálculo de sugerencias en segundo plano con debounce, para
     /// que el corrector no bloquee nunca la siguiente pulsación de tecla.
     private func scheduleSuggestions() {
-        guard !searchingClips else { return }
+        guard !searching else { return }
         guard config.prediction, numPad == nil else { setSuggestions([]); return }
         suggestionWork?.cancel()
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
@@ -1809,7 +1841,7 @@ final class KeyboardViewController: UIInputViewController {
                                                                   replacements: shortcuts,
                                                                   capitalizeNext: capNext)
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.mode == .keys, !self.searchingClips else { return }
+                guard let self, self.mode == .keys, !self.searching else { return }
                 self.setSuggestions(result)
             }
         }
@@ -1887,7 +1919,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func setSuggestions(_ words: [String]) {
-        guard !searchingClips else { return }
+        guard !searching else { return }
         var titles = words
         var paste: PasteChipView.Kind?
         if mode == .keys, let revert = validRevert() {
@@ -2049,7 +2081,7 @@ final class KeyboardViewController: UIInputViewController {
         case .ignored, .empty:
             break
         }
-        if mode == .keys, !searchingClips { scheduleSuggestions() }
+        if mode == .keys, !searching { scheduleSuggestions() }
     }
 
     /// iOS no deja a los teclados de terceros escribir imágenes ni archivos,
@@ -2173,9 +2205,10 @@ final class KeyboardViewController: UIInputViewController {
 
     private func toggleClipboard() {
         keyFeedback()
-        if searchingClips {
-            // Mientras se escribe la búsqueda, el icono hace de «volver».
-            endClipSearch(showResults: true)
+        if let target = searchTarget {
+            // Mientras se escribe la búsqueda, el icono hace de «volver» al
+            // panel de donde salió.
+            endSearch(then: target == .clips ? .clipboard : .emoji)
             return
         }
         mode = (mode == .clipboard) ? .keys : .clipboard
@@ -2184,15 +2217,19 @@ final class KeyboardViewController: UIInputViewController {
 
     private func toggleEmoji() {
         keyFeedback()
-        if searchingClips { endClipSearch(showResults: false) }
+        if searching {
+            endSearch(then: .emoji)
+            return
+        }
         mode = (mode == .emoji) ? .keys : .emoji
         refreshMode()
     }
 
     private func refreshMode() {
         updateTopIcons()
-        emojiButton.isHidden = searchingClips
-        searchField.isHidden = !searchingClips
+        emojiButton.isHidden = searching
+        updateSearchField()
+        view.setNeedsLayout()
         switch mode {
         case .keys:      showKeyboard()
         case .clipboard: showPanel(AnyView(clipboardPanel()))
@@ -2201,7 +2238,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func updateTopIcons() {
-        if searchingClips {
+        if searching {
             clipboardButton.setSymbol("chevron.backward", active: true)
         } else {
             clipboardButton.setSymbol(mode == .clipboard ? "keyboard" : "doc.on.clipboard",
@@ -2220,6 +2257,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func showEmojiPanel() {
+        EmojiSearchIndex.prewarm()
         keyboardArea.isHidden = true
         panelHost?.view.isHidden = true
         pasteChip.isHidden = true
@@ -2250,7 +2288,7 @@ final class KeyboardViewController: UIInputViewController {
         panelHost?.view.isHidden = true
         emojiPanel?.isHidden = true
         keyboardArea.isHidden = false
-        if searchingClips {
+        if searching {
             pasteChip.isHidden = true
             suggestionButtons.forEach { $0.isHidden = true }
             separatorViews.forEach { $0.isHidden = true }
@@ -2422,7 +2460,7 @@ final class KeyboardViewController: UIInputViewController {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
                 guard let self else { return }
                 self.snapshotRefreshQueued = false
-                guard self.mode == .clipboard, !self.searchingClips else { return }
+                guard self.mode == .clipboard, !self.searching else { return }
                 self.refreshSnapshots()
                 self.refreshMode()
             }
@@ -2538,44 +2576,108 @@ final class KeyboardViewController: UIInputViewController {
         }
     }
 
-    // MARK: Búsqueda en el portapapeles
+    // MARK: Búsqueda (portapapeles y emojis)
     //
     // Un campo de texto dentro de un teclado no puede recibir texto: el
     // teclado del sistema no se abre para él. Antes el buscador del panel se
     // podía tocar pero no escribir en él. Ahora, al tocarlo, vuelven las
     // teclas y escriben en la búsqueda; «Buscar» (o el icono de la izquierda)
-    // muestra los resultados.
+    // muestra los resultados. La de emojis va igual, con los resultados
+    // encima de las teclas mientras se escribe.
 
-    private func beginClipSearch() {
+    private func beginClipSearch() { beginSearch(.clips) }
+
+    private func beginSearch(_ target: SearchTarget) {
         keyFeedback()
-        searchingClips = true
+        searchTarget = target
+        if target == .emoji { emojiQuery = "" }
         numPad = nil
         symbolsMode = false
         shift = .off
         shiftByUser = false
         suggestionWork?.cancel()
         mode = .keys
+        updateHeight()
         rebuildKeys()
         refreshMode()
     }
 
-    private func endClipSearch(showResults: Bool) {
-        searchingClips = false
+    /// Cierra la búsqueda y abre `next`: el panel de donde salió o las letras.
+    private func endSearch(then next: Mode) {
+        if searchTarget == .emoji { emojiQuery = "" }
+        searchTarget = nil
+        symbolsMode = textDocumentProxy.keyboardType == .numbersAndPunctuation
         numPad = numPadDismissed ? nil : Self.numPad(for: textDocumentProxy.keyboardType)
+        updateHeight()
         rebuildKeys()
-        mode = showResults ? .clipboard : .keys
+        mode = next
         refreshMode()
-        if !showResults { updateShiftFromContext() }
+        if next == .keys { updateShiftFromContext() }
+    }
+
+    /// Lo que se está escribiendo en la búsqueda activa.
+    private var activeQuery: String {
+        get { searchTarget == .emoji ? emojiQuery : clipQuery }
+        set {
+            if searchTarget == .emoji { emojiQuery = newValue } else { clipQuery = newValue }
+        }
     }
 
     private func appendToQuery(_ text: String) {
-        clipQuery += text
+        activeQuery += text
         updateSearchField()
     }
 
+    private func deleteFromQuery() {
+        guard !activeQuery.isEmpty else { return }
+        activeQuery.removeLast()
+        updateSearchField()
+    }
+
+    /// El campo de la barra superior: la búsqueda que se está escribiendo o,
+    /// en el panel de emojis, la lupa para empezar una.
     private func updateSearchField() {
-        let count: Int? = clipQuery.trimmingCharacters(in: .whitespaces).isEmpty ? nil : visibleSnapshots().count
-        searchField.update(query: clipQuery, matches: count)
+        switch searchTarget {
+        case .clips:
+            let count: Int? = clipQuery.trimmingCharacters(in: .whitespaces).isEmpty ? nil : visibleSnapshots().count
+            searchField.configure(placeholder: "Buscar en el portapapeles", editing: true)
+            searchField.update(query: clipQuery, matches: count)
+        case .emoji:
+            searchField.configure(placeholder: "Buscar emoji", editing: true)
+            searchField.update(query: emojiQuery, matches: nil)
+            showEmojiResults()
+        case nil:
+            searchField.configure(placeholder: "Buscar emoji", editing: false)
+            searchField.update(query: "", matches: nil)
+            emojiResults.show([], message: nil)
+        }
+        searchField.isHidden = !(searching || mode == .emoji)
+        emojiResults.isHidden = searchTarget != .emoji
+    }
+
+    // MARK: Búsqueda de emojis
+    //
+    // La lupa del panel de emojis abre las letras con una fila de resultados
+    // encima, que cambia con cada letra. Tocar un resultado lo escribe y deja
+    // seguir eligiendo; «OK» vuelve a las letras y el icono de la izquierda,
+    // al panel.
+
+    private func beginEmojiSearch() {
+        EmojiSearchIndex.prewarm()
+        beginSearch(.emoji)
+    }
+
+    /// Lo encontrado, con el tono elegido para cada emoji; sin nada escrito,
+    /// los recientes.
+    private func showEmojiResults() {
+        let query = emojiQuery.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else {
+            emojiResults.show(EmojiStore.recents, message: "Escribe para buscar un emoji")
+            return
+        }
+        let panel = emojiPanel
+        let found = EmojiSearchIndex.keyboard.search(query).map { panel?.displayed($0) ?? $0 }
+        emojiResults.show(found, message: "Ningún emoji con «\(query)»")
     }
 }
 
@@ -3335,10 +3437,15 @@ struct ClipboardPanel: View {
     }
 }
 
-// MARK: - Campo de búsqueda del portapapeles (mientras se escribe)
+// MARK: - Campo de búsqueda de la barra superior
+//
+// Mientras se escribe una búsqueda (portapapeles o emojis) enseña lo escrito con
+// un cursor que parpadea. En el panel de emojis, sin escribir, es la lupa para
+// empezar a buscar: tocarlo llama a `onTap`.
 
-final class ClipSearchFieldView: UIView {
+final class SearchFieldView: UIView {
     var onClear: (() -> Void)?
+    var onTap: (() -> Void)?
 
     private let icon = UIImageView()
     private let label = UILabel()
@@ -3367,12 +3474,26 @@ final class ClipSearchFieldView: UIView {
         clearButton.setSymbol("xmark.circle.fill")
         clearButton.onTap = { [weak self] in self?.onClear?() }
         addSubview(clearButton)
+        isAccessibilityElement = true
         update(query: "", matches: nil)
         applyTheme()
     }
     required init?(coder: NSCoder) { fatalError() }
 
     private var showsPlaceholder = true
+    private var placeholder = "Buscar"
+    /// Se está escribiendo en él; si no, es un botón que abre la búsqueda.
+    private var isEditing = true
+
+    func configure(placeholder: String, editing: Bool) {
+        guard placeholder != self.placeholder || editing != isEditing else { return }
+        self.placeholder = placeholder
+        isEditing = editing
+        caret.isHidden = !editing
+        accessibilityTraits = editing ? .searchField : .button
+        alpha = 1
+        setNeedsLayout()
+    }
 
     func applyTheme() {
         let theme = KeyStyle.theme
@@ -3386,8 +3507,9 @@ final class ClipSearchFieldView: UIView {
 
     func update(query: String, matches: Int?) {
         showsPlaceholder = query.isEmpty
+        accessibilityLabel = query.isEmpty ? placeholder : query
         if query.isEmpty {
-            label.text = "Buscar en el portapapeles"
+            label.text = placeholder
             label.textColor = KeyStyle.theme.secondaryText
         } else {
             label.text = query
@@ -3398,7 +3520,7 @@ final class ClipSearchFieldView: UIView {
         } else {
             countLabel.text = nil
         }
-        clearButton.isHidden = query.isEmpty
+        clearButton.isHidden = query.isEmpty || !isEditing
         caret.frame.origin.x = -100          // se recoloca en layoutSubviews
         setNeedsLayout()
     }
@@ -3434,9 +3556,22 @@ final class ClipSearchFieldView: UIView {
     }
 
     // Los toques en el campo se quedan aquí: no deben llegar a la barra
-    // superior, que los reparte entre los iconos de los extremos.
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {}
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {}
+    // superior, que los reparte entre los iconos de los extremos. Como botón,
+    // se aclara al apoyar el dedo y abre la búsqueda al soltarlo encima.
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if !isEditing { alpha = 0.6 }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard !isEditing else { return }
+        alpha = 1
+        if let t = touches.first, !bounds.insetBy(dx: -8, dy: -8).contains(t.location(in: self)) { return }
+        onTap?()
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        alpha = 1
+    }
 }
 
 // MARK: - Botón de sugerencia (toque propio, fiable en teclados)

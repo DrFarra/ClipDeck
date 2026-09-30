@@ -590,6 +590,1937 @@ enum EmojiCatalog {
         "👩🏽‍❤️‍👩🏽","👩🏽‍❤️‍👩🏾","👩🏽‍❤️‍👩🏿","👩🏾‍❤️‍👩🏻","👩🏾‍❤️‍👩🏼","👩🏾‍❤️‍👩🏽","👩🏾‍❤️‍👩🏾","👩🏾‍❤️‍👩🏿","👩🏿‍❤️‍👩🏻","👩🏿‍❤️‍👩🏼","👩🏿‍❤️‍👩🏽","👩🏿‍❤️‍👩🏾","👩🏿‍❤️‍👩🏿",
     ]
 
+    /// Para buscar: una línea por emoji con «emoji ⇥ nombre|otro nombre ⇥
+    /// palabras clave», todo sin tildes ni mayúsculas. Nombres y palabras de
+    /// CLDR en el español de España y el de Latinoamérica. Del más usado al
+    /// menos (clasificación de Unicode), que es como se desempatan los
+    /// resultados; lo más nuevo, detrás. Lo lee `EmojiSearchIndex`.
+    static let searchData = #"""
+        😂	cara llorando de risa|cara llorando de felicidad	lagrima lagrimas divertido feliz jajajajajaja jejejejejeje lol carcajada sonrisa xd
+        ❤️	corazon rojo	emocion amor azul pica love quiero amo
+        😍	cara sonriendo con ojos de corazon|cara sonriente con ojos de corazon	amor sonrisa corazones enamorado tierno ojo
+        🤣	cara revolviendose de la risa	carcajada ojos cerrados llorando comico gracioso jajajaja jejejeje llanto felicidad xd
+        😊	cara feliz con ojos sonrientes	ojo rubor sonrisa alegre sonriente satisfecho sonrojarse
+        🙏	manos en oracion	gracias mano orar favor rezar gesto porfa amen
+        💕	dos corazones	amantes amor corazon emocion enamorado xoxo
+        😭	cara llorando fuerte	lagrima llorar triste lagrimas sollozo
+        😘	cara lanzando un beso	amor manda cariño corazon besos mandar romance mando muak
+        👍	pulgar hacia arriba	mano señal 1 acuerdo me gusta ok subir like vale dale
+        😅	cara sonriendo con sudor frio	risa boca abierta sonrisa pero
+        👏	manos aplaudiendo	aplaudir palmas señal aplauso bravo genial haciendo mano
+        😁	cara radiante con ojos sonrientes	ojo risa sonrisa riendo dientes divertido feliz
+        ♥️	palo de corazones|corazones	carta juego cartas corazon juegos naipes palos
+        🔥	fuego	llama arder caliente herramienta
+        💔	corazon roto	emocion partido desamor rompimiento separacion tristeza mal sufrir triste
+        💖	corazon brillante	amor emocion emocionado felicidad
+        💙	corazon azul	emocion amor
+        😢	cara llorando	lagrima llorar triste llanto lagrimas pena tristeza
+        🤔	cara pensativa|cara pensante	duda pensando barbilla considerar hmm pensar ponderar preguntarse reflexionar
+        😆	cara sonriendo con los ojos cerrados	abierta boca risa jajaja jejeje sonrisa xd carcajada satisfecho
+        🙄	cara con ojos en blanco|cara revoleando los ojos	frustracion vueltos fastidio revolear voltear volteando
+        💪	biceps flexionado	comic fuerte musculo bicep cuerpo ejercicio fuerza gimnasio gym
+        😉	cara guiñando el ojo	guiño apachando sexy
+        ☺️	cara sonriente	contorno relajado sonrisa feliz emoticono timida
+        👌	señal de aprobacion con la mano|señal de ok	bien acuerdo entendido genial perfecto si super gesto
+        🤗	cara con manos abrazando	abrazo sonrisa feliz
+        💜	corazon morado	emocion
+        😔	cara desanimada	alicaido desanimado pensativo pensativa deprimido triste
+        😎	cara sonriendo con gafas de sol|cara sonriendo con lentes de sol	guay chevere cool ojos onda relax brillante
+        😇	cara sonriendo con aureola|cara sonriente con aureola	angel halo sonrisa angelical feliz inocente
+        🌹	rosa	flor amor naturaleza pasion rojo planta
+        🤦	persona con la mano en la frente	facepalm incredulidad exasperacion no puedo creer otra vez puede ser omg cara palma
+        🎉	cañon de confeti|lanzador de serpentina	celebracion fiesta felicidad felicidades
+        ‼️	exclamacion doble	puntuacion sorpresa signo
+        💞	corazones giratorios|corazones que giran	corazon giratorio amor aire emocion girar sentimiento vueltas
+        ✌️	mano con señal de victoria|gesto de victoria	amor paz dedos tijera
+        ✨	chispas	* bengala estrellas brillar brillo estrella centelleantes magia chispa
+        🤷	persona encogida de hombros	duda encogerse indiferencia ignorancia ni idea no nose
+        😱	cara gritando de miedo	asustado panico atemorizada terror grito horror sorpresa susto
+        😌	cara de alivio	aliviado feliz satisfaccion tranquilidad
+        🌸	flor de cerezo	flores naturaleza primavera
+        🙌	manos levantadas celebrando|chocar las manos	celebracion gesto hurra mano bravo celebrar chocalas festejo levantando ambas arriba cinco
+        😋	cara saboreando comida	delicioso hambre rico antojo deliciosa lengua ñam satisfecho broma sonriente
+        💗	corazon creciente	emocionado latido nervioso amor inquieto crece emocion entusiasmado latidos nervios
+        💚	corazon verde	emocion amor
+        😏	cara sonriendo con superioridad	listillo gesto hacer travesuras misterioso picaro sarcastico sonrisa sospechoso travesura creido
+        💛	corazon amarillo	emocion amistad
+        🙂	cara sonriendo ligeramente	sonrisa levemente feliz leve
+        💓	corazon latiendo	amor emocion latido palpitante palpita latidos palpitar
+        🤩	cara sonriendo con estrellas|cara sonriendo con ojos de estrella	sonrisa emocionada deslumbrante emocionante guau impresionante increible super wow emocionado estrellados hermosa hermoso
+        😄	cara sonriendo con ojos sonrientes	abierta ojo sonrisa boca feliz dientes divertido risa
+        😀	cara sonriendo	divertido feliz sonrisa contento diente felicidad
+        🖤	corazon negro	malo malvado
+        😃	cara sonriendo con ojos grandes	divertido risa boca abierta sonriente sonrisa
+        💯	cien puntos|100 puntos	pleno claramente completo acuerdo definitivamente perfecto puntaje puntuacion calificacion total
+        🙈	mono con los ojos tapados|mono con ojos tapados	cara mal prohibido ciego cubrir esconder no ver tapar
+        👇	dorso de mano con indice hacia abajo|dorso de mano con dedo indice hacia abajo|mano con dedo indice hacia abajo	apuntar apuntando señalar
+        🎶	notas musicales	musica corchea nota corcheas
+        😒	cara de desaprobacion	insatisfaccion rechazo aburrido infeliz mmm molesto mueca poco divertida divertido raro aburrida enojada enojado molesta
+        🤭	cara con mano sobre la boca	ostras uy vaya ay perdon tapandose chanfle huy jijiji siento risa ups risita
+        ❣️	exclamacion de corazon|exclamacion con forma de corazon	puntuacion
+        ❗	exclamacion roja|signo de exclamacion|signo de exclamacion rojo	puntuacion
+        😜	cara sacando la lengua y guiñando un ojo	guiño broma divertido era loco sacar guiñar
+        💋	marca de beso	labios romance amor labial pintalabios sexy
+        👀	ojos	cara ahora veo buscando cuerpo mira esto mirar no leo ojo
+        😪	cara de sueño	dormir somnolienta gota mocos resfriado somnoliento
+        😑	cara sin expresion	inexpresion inexpresiva inexpresivo inexpresividad malo nada comentarios
+        💥	colision	comic bomba choque emocion explosion fuegos artificiales petardo simbolo comics
+        🙋	persona con la mano levantada|persona levantando la mano	feliz gesto levantar hola yo puedo
+        😞	cara decepcionada|cara de decepcion	decepcionado culpa triste
+        😩	cara agotada	agotado cansado cansancio exhausto llorar noooo cansada exhausta
+        😡	cara cabreada|cara de odio|cara de enojo	cabreo enfadado furia enojada roja enfado ira rojo enojado
+        🤪	cara de loco	grande ojo pequeño chistosa loca ojos desorbitados locos
+        👊	puño cerrado|puño cerrado acercandose	puñetazo chocala piedra rock golpe mano
+        ☀️	sol	espacio rayos soleado calor encendido estrella luz brillante
+        😥	cara triste pero aliviada	aliviado decepcionado menos mal alivio decepcion preocupacion sudor susto
+        🤤	cara babeando	baba babas babear babea delicioso rico saliva suculento
+        👉	dorso de mano con indice a la derecha|mano apuntando indice a la derecha	dedo apuntar hacia
+        💃	mujer bailando|bailarina	bailar baila bailarin baile flamenca flamenco persona salsa
+        😳	cara sonrojada	colorado sonrojado asombro aturdido caliente calor ejercicio guau incredulidad torpe verguenza avergonzado sorprendido sorpresa
+        ✋	mano levantada	choca esos cinco alto dedos levantar abierta palma papel stop
+        😚	cara besando con los ojos cerrados	beso cerrado ojo sonrojarse xoxo
+        😝	cara con ojos cerrados y lengua fuera|cara con los ojos bien cerrados y sacando la lengua|cara con ojos cerrados y sacando la lengua	ojo sabor asco broma feliz horrible sacar
+        😴	cara durmiendo	dormido sueño zzz buenas noches cansancio dormir hora noche siesta zzzzz
+        🌟	estrella brillante	resplandeciente brillar brillo centellar
+        😬	cara haciendo una mueca	feliz dientes disculpa perdon sonreir sonriente ups
+        🙃	cara al reves	broma feliz loco sonreir
+        🍀	trebol de cuatro hojas	suerte 4 buena irlanda hoja
+        🌷	tulipan	flor naturaleza
+        😻	gato sonriendo con ojos de corazon|gato con ojos de corazon	cara enamorado amor animal corazones sonriente
+        😓	cara con sudor frio|cara alicaida con sudor	abatida dolor cabeza nervios susto tristeza
+        ⭐	estrella	estelar
+        ✅	boton de marca de verificacion	seleccion palomita visto bueno
+        🌈	arcoiris	colores lluvia clima
+        😈	cara sonriendo con cuernos|cara morada sonriendo con cuernos|cara malvada sonriendo con cuernos	demonio sonrisa diablito diablo fantasia hacer travesuras malicioso picaro pillo sonriente cuento hadas
+        🤘	mano haciendo el signo de cuernos|gesto de cuernos|mano haciendo los cuernos	dedo rock buena onda cool dedos mola roll
+        💦	gotas de sudor	comic emocion chorro agua comics salpicar sudar
+        ✔️	marca de verificacion|marca de verificacion grande	seleccion check listo negra verficacion verificar
+        😣	cara desesperada|cara perseverante	desesperacion frustracion equivocado estres me equivoque perdon perseverar preocupacion
+        🏃	persona corriendo	carrera deporte maraton corredor correr deportista hombre maratonista voy
+        💐	ramo de flores	bouquet amor aniversario romance flor
+        ☹️	cara con el ceño fruncido	muy triste
+        🎊	bola de confeti|confeti	celebracion cumpleanos cumpleaños felicidades felicitaciones festejo fiesta lluvia piñata
+        💘	corazon con flecha	amor emocion cupido
+        😠	cara enfadada	enfadado histerico enojo enojada enfado frustracion enojado
+        ☝️	dedo indice hacia arriba	apuntar mano apuntando palma señalar
+        😕	cara de confusion	confuso confusa confundido triste
+        🌺	flor de hibisco|flor de jamaica	naturaleza hibiscus
+        🎂	tarta de cumpleaños|pastel de cumpleaños	celebracion dulce panaderia postre torta
+        🌻	girasol	flor sol naturaleza pipas planta semillas
+        😐	cara neutral	inexpresivo poquer seria celo da igual no impresionado me impresiona pokerface expresion
+        🖕	dedo corazon hacia arriba|dorso de mano con dedo medio hacia arriba|mano con el dedo medio levantado	peineta insulto
+        💝	corazon con lazo	emocion san valentin amor aniversario beso moño
+        🙊	mono con la boca tapada|mono con boca tapada	cara mal prohibido callado hablar no secreto silencio ups
+        😹	gato llorando de risa|cara de gato llorando de risa	lagrima alegria divertido lagrimas
+        🗣️	cabeza parlante|silueta hablando	cara hablar anuncio persona habla
+        💫	simbolo de mareo|mareado	comic emocion estrella brillar fugaz estrellas ver comics
+        💀	calavera|craneo	cara cuento monstruo muerte miedo hadas
+        👑	corona	accesorios complementos reina rey majestad ropa vestimenta realeza
+        🎵	nota musical	musica corchea sonido
+        🤞	dedos cruzados	cruzar mano suerte changuitos desear
+        😛	cara sacando la lengua	broma feliz divertido fuera risa sacar xp
+        🔴	circulo rojo	geometria grande punto geometrico
+        😤	cara resoplando	cabreo enfado arrecho mucho echar humo infeliz mirada triunfo molesto victoria gane ganar
+        🌼	flor	campo naturaleza planta primavera florecer
+        😫	cara cansada	cansado agotado exhausto sufrir triste
+        ⚽	balon de futbol|pelota de futbol|pelota de soccer
+        🤙	mano haciendo el gesto de llamar|gesto de llamada	meñique pulgar rock
+        ☕	bebida caliente	cafe taza
+        🏆	trofeo	premio campeon copa ganar victoria ganador
+        🧡	corazon naranja|corazon anaranjado	emocion tomate
+        🎁	regalo|regalo envuelto	celebracion envoltorio presente cumpleaños moño obsequio caja
+        ⚡	alto voltaje	electricidad peligro señal rayo tension trueno electrico relampago zap
+        🌞	sol con cara	brillante calor clima dia playa soleado verano
+        🎈	globo	celebracion bomba cumpleaños fiesta rojo
+        ❌	marca de cruz|cruz|tache	cancelar tachado tachar multiplicacion multiplicar
+        ✊	puño en alto|puño levantado	cerrado mano puñetazo levantar cerrada piedra
+        👋	mano saludando	agitar saludar saludo adios chau hasta luego hola me voy chao bye
+        😲	cara asombrada	alucinado asombrado pasmado asombro horrorizado sorprendido sorpresa susto totalmente asustado horrorizada sorprendida
+        🌿	hierba	hoja verde naturaleza planta
+        🤫	cara pidiendo silencio	callado calla dedo sobre boca chiton no digas nada secreto shh sorpresa
+        👈	dorso de mano con indice a la izquierda|mano apuntando indice a la izquierda	dedo apuntar hacia señalar
+        😮	cara con la boca abierta	asustado empatia oops sorpresa
+        🙆	persona haciendo el gesto de de acuerdo|persona haciendo el gesto de ok	mano vale bien esta omg levantando brazos sobre cabeza
+        🍻	jarras de cerveza brindando|brindis con cerveza	bar jarra restaurante bebida brindar celebrar festejar salud
+        🍃	hojas revoloteando al viento|hoja al viento	revolotear soplar arrastradas volando naturaleza
+        🐶	cara de perro	mascota animal cachorro perrito
+        💁	persona de mostrador de informacion|persona en mostrador de informacion	mano ayuda centro serio insolente obvio inclinada sarcasmo mesa
+        😰	cara con ansiedad y sudor	frio apuro asustad azul boca abierta acelerada nervios precipitado
+        🤨	cara con ceja alzada	desconfiado esceptico subiendo arriba ceño fruncido confusion desacuerdo duda fruncir mmm no entiendo confundida confundido dudo
+        😶	cara sin boca	callado silencio callate mudo comentario palabras
+        🤝	apreton de manos	acuerdo reunion saludar
+        🚶	persona caminando	andar caminar caminata deambular pasear paseo peaton
+        💰	bolsa de dinero	dolares banco cash plata
+        🍓	fresa	freson fruta comida frutilla planta baya
+        💢	simbolo de enfado|enojo	comic enfadado comics emocion señal
+        🇺🇸	bandera estados unidos
+        🤟	gesto de te quiero	mano amor rock amo tres dedos
+        🙁	cara con el ceño ligeramente fruncido	poco triste tristeza
+        🚨	luces de policia|luz de patrullero|sirena de patrulla|torreta	coche auto emergencia transporte carro girando
+        💨	salir corriendo	carrera comic correr humo emocion flatulencia nube pedo rapido velocidad viento escapar huir
+        🤬	cara con simbolos en la boca	maldecir palabrota simbolo enojo enfadada decir groserias malas palabras disgusto insultos palabrotas censurada enfadado enojada enojado
+        ✈️	avion	aeroplano aeropuerto aire jet vehiculo viajar viaje volar transporte
+        🎀	lazo|moño	celebracion cinta festejo regalo rosa
+        🍺	jarra de cerveza|tarro de cerveza	bar restaurante bebida brindar jarro verano
+        🤓	cara de empollon|cara de nerd	friki friqui anteojos estudioso experto geek inteligente lentes listo emoticon gafas
+        😙	cara besando con ojos sonrientes	beso ojo sonrisa enviando sonriente dando
+        💟	adorno de corazon	amor decoracion emocion violeta
+        🌱	planta joven|plantula|planta de semillero	planton germinar hojas plantita semilla
+        😖	cara de frustracion	frustrado frustrada enfadado enojado enojo tristeza
+        👶	bebe	joven niño cara persona recien nacido infante nene
+        ▶️	reproducir|boton de reproduccion	flecha triangulo adelante derecha
+        ➡️	flecha hacia la derecha	direccion este adelante
+        ❓	interrogacion roja|signo de interrogacion|signo de interrogacion rojo	pregunta puntuacion
+        💎	piedra preciosa	diamante gema joya azul romance
+        💸	billete con alas	banco dinero billetes cash volando
+        ⬇️	flecha hacia abajo	direccion sur negativo cardinal
+        😨	cara asustada|cara de miedo	asustado miedoso horror susto temor terror
+        🌚	luna nueva con cara	espacio
+        🦋	mariposa	bonito insecto azul bonita animal
+        😷	cara con mascarilla medica|cara con barbijo	enfermo malo mascara cubrebocas enfermedad germenes gripe resfriado resfrio doctor
+        🕺	hombre bailando|bailarin	bailar baile elvis
+        ⚠️	advertencia	cuidado señal
+        🙅	persona haciendo el gesto de no	mano prohibido brazos cruzados esta mal ni pienses acerques diciendo alto
+        😟	cara preocupada|cara de preocupacion	preocupado estres nervios sorprendido
+        😵	cara mareada|cara noqueada	mareo mareado equis soprendido sorpresa xx muerto noqueado
+        👎	pulgar hacia abajo	mano señal 1 bajar negativo no me gusta rechazo desacuerdo
+        🤲	palmas hacia arriba juntas	oracion deseo manos rezando rezar rezo
+        🤠	cara con sombrero de vaquero	vaquera broma bromista cowboy feliz
+        🤧	cara estornudando	estornudar estornudo pañuelo alergia estornuda enfermedad resfriado resfrio
+        📌	chincheta|chinche	tachuela pin
+        🔵	circulo azul	geometria grande geometrico
+        💅	pintarse las uñas	cosmetica esmalte manicura aplicacion cuidado pintauñas
+        🧐	cara con monoculo	aristocratico estirado aristocrata lente echar ojo elegante luneta circular revisar
+        🐾	huellas de pezuñas|huellas de pezuña	animal perro patas pies
+        🍒	cerezas	cereza fruta guindas planta bayas roja
+        😗	cara besando|cara dando un beso	amor besar besito
+        🤑	cara con lengua de dinero	boca billete millonario pensando
+        🚀	cohete	espacio vehiculo luna nasa planeta viajar espacial
+        🌊	ola de mar|ola	oceano agua azul naturaleza oceanica surf
+        🤯	cabeza explotando	explosion cara shock impresion increible va explotar no es posible puedo creer cerebro conmocionado sorprendido
+        🐷	cara de cerdo	gorrino animal chancho chuleta cochinito cochino granja jamon tocineta porcino puerco
+        ☎️	telefono|telefono de linea|telefono fijo	agenda cables llamar
+        💧	gota	agua comic sudor clima frio lluvia sudar gotita
+        😯	cara estupefacta	alucinado estupefacto sorprendido confusion sorpresa susto
+        💆	persona recibiendo masaje|masaje facial	cara salon alivio belleza dolor cabeza relajacion relax spa
+        👆	dorso de mano con indice hacia arriba|dorso de mano con dedo indice hacia arriba|mano con dedo indice hacia arriba	apuntar apuntando señalar
+        🎤	microfono	entretenimiento karaoke micro artista cantante cantar musica sonido voz
+        🙇	persona haciendo una reverencia	disculpa gesto perdon arrepentimiento siento perdoname rogar
+        🍑	melocoton|durazno	fruta
+        ❄️	copo de nieve	frio clima tiempo
+        🌴	palmera	arbol palma playa tropical cocos
+        🇧🇷	bandera brasil
+        💣	bomba	comic emocion explosion comics explota
+        🐸	rana	cara animal verde
+        💌	carta de amor	corazon correo romance sobre
+        📍	chincheta redonda|chinche redonda	mapa tachuela ubicacion
+        🥀	flor marchita	marchitada marchitarse naturaleza triste tristeza
+        🤢	cara de nauseas	vomitar asco verde enfermedad guacala malestar vomito
+        👅	lengua	cuerpo broma cara
+        💡	bombilla|foco	comic electricidad idea luz bombillo lampara lamparita
+        💩	caca con ojos|caca	comic mierda mojon apesta baño chocolate comico estiercol gracioso laxante popo wc cara monstruo montaña
+        ⁉️	exclamacion e interrogacion	pregunta simbolo
+        👐	manos abiertas	señal abierta mano
+        📸	camara con flash	foto video
+        👻	fantasma	cara criatura cuento monstruo espanto fantasia susto creatura hadas
+        🤐	cara con la boca cerrada con cremallera|cara con la boca cerrada con cierre	callar no digas nada secreto silencio zipper
+        🤮	cara vomitando	enfermo malo vomitar asco nauseas verde guacala malestar vomito
+        🎼	pentagrama|partitura	musica clave sol
+        ✍️	mano escribiendo	escribir lapiz nota trabajo
+        🚩	bandera triangular|banderin triangular	localizacion informativa ubicacion
+        🍎	manzana roja	fruta poma comida
+        🍊	mandarina	fruta naranja vitamina citrico
+        👼	bebe angel|cara de angel bebe	cuento angelito cielo fantasia iglesia hadas
+        💍	anillo	diamante brillante compromiso matrimonio romance joya
+        📣	megafono	comunicacion altavoz anuncio parlante
+        🥂	copas brindando	bebida brindar brindis celebracion copa
+        ⤵️	flecha derecha curvandose hacia abajo	curva direccion
+        📱	telefono movil	celular
+        ☔	paraguas con gotas de lluvia|paraguas con gotas	accesorio clima llover sombrilla tiempo ropa
+        🌙	luna|media luna|luna creciente	espacio clima cuarto cruasan fase lunar
+        🍾	botella descorchada	bar beber cava corcho brindar celebracion celebrar champagne champan champaña festejar
+        🎧	auricular|audifonos	cascos entretenimiento musica auriculares
+        🍁	hoja de arce	arbol canada maple otoño
+        ⭕	circulo rojo hueco	aro grande
+        🏀	balon de baloncesto|pelota de basquet	canasta deporte basket basketball basquetbol cesto
+        ☠️	calavera y huesos cruzados|calavera	cara muerte mal monstruo
+        ⚫	circulo negro	geometria punto geometrico
+        🖐️	mano abierta	dedo cinco cuerpo dedos palma yo separados
+        😧	cara angustiada|cara de angustia	angustiado infeliz sufrimiento sufrir
+        🎯	diana|dardo en el centro	blanco juego dardos objetivo tiro
+        📲	movil con una flecha|telefono movil con una flecha|flecha apuntado a telefono celular	llamada recibir comunicacion hacer entrante auricular
+        ☘️	trebol	planta 4 cuatro irlanda suerte
+        👁️	ojo	cuerpo cara mira ver
+        🍷	copa de vino	bar bebida vaso alcohol restaurante
+        👄	boca	labios beso cara cuerpo
+        🐟	pez	pececillo pescado piscis zodiaco animal cena mar pescar picis
+        🍰	trozo de tarta|rebanada de pastel|pastel de frutas	pedazo restaurante celebracion cumpleaños dulce fiesta porcion torta postre
+        💤	simbolo de sueño	comic dormir zzz buenas noches cansancio comics pereza roncar ronquido siesta emocion estar durmiendo
+        🕊️	paloma	ave pajaro paz animal vuelo
+        📺	television|televisor	tv video
+        💭	bocadillo de pensamiento|globo de pensamiento	burbuja comic idea nube pensar comics
+        🐱	cara de gato	mascota animal
+        🐝	abeja	insecto miel animal flores naturaleza primavera
+        🇲🇽	bandera mexico
+        🧚	hada	campanilla oberon puck titania alas madrina maga ninfa campanita
+        🔝	flecha top	arriba hacia subir
+        📢	altavoz de mano|altavoz	comunicacion altavoces anuncio estadio parlante fuerte publico
+        📷	camara de fotos|camara fotografica	foto fotografia video
+        🐕	perro	cachorro perrete perrito mascota animal canino
+        🎸	guitarra	instrumento musical musica rock
+        🔫	pistola de agua	juguete verano arma revolver
+        🤚	dorso de la mano|dorso de la mano levantada	levantado adios alto chao cinco dedos alzado saludando
+        🍭	piruleta|paleta dulce	chuche chucheria golosina chupeta chupetin postre
+        🍆	berenjena	fruto verdura planta vegetal
+        💉	jeringuilla|jeringa	aguja medicina medico analisis doctor hospital inyeccion cargada sangre vacuna enfermo
+        🌎	globo terraqueo mostrando america|globo terraqueo america	mundo planeta tierra bola esfera terrestre mapa
+        😦	cara con el ceño fruncido y la boca abierta|cara boquiabierta
+        🌀	ciclon	mareo tifon tornado clima huracan mareado
+        👿	cara enfadada con cuernos|cara morada enfadada con cuernos|cara malvada enfadada con cuernos	demonio diablo diablillo fantasia granuja
+        ☑️	casilla con marca de verificacion|casilla seleccionada	seleccion aprobar check listo recuadro
+        🎥	camara de cine|filmadora|camara de video|camara de filmar	entretenimiento pelicula cinematografica
+        🌧️	nube con lluvia|lluvia	clima tiempo
+        👽	alienigena	alien cara criatura extraterrestre ovni ciencia ficcion cuento espacio fantasia creatura
+        🍋	limon	citrico citron fruta arbol
+        🤒	cara con termometro	enfermo malo calentura enfermedad fiebre
+        🤡	cara de payaso	divertido
+        🍫	tableta de chocolate|barra de chocolate	restaurante dulce postre
+        📚	libros	libro colegio educacion escuela estudiar leer novelas pila
+        🏁	bandera de cuadros	carreras deporte motor llegada carrera meta
+        🤕	cara con la cabeza vendada	dolor herida venda vendaje descalabrado descalabrar enfermo lesion herido vendas
+        🦄	unicornio	cara animal fantasia rosado
+        🍅	tomate	ensalada fruta verdura comida vegetal jitomate planta
+        🚗	coche|auto|carro	automovil vehiculo transporte
+        🚫	prohibido|señal de prohibicion	entrar no pasar cancelar fumar entrada
+        💵	billete de dolar	banco dinero fajo billetes moneda
+        ⚾	beisbol|pelota de beisbol	balon baseball
+        🔪	cuchillo de cocina	arma cocinar chef cocinando herramienta hocho
+        🔔	campana	capilla iglesia
+        ♨️	aguas termales	termas vapor caliente fuentes
+        🌳	arbol de hoja caduca|arbol caducifolio	bosque caducas hojas naturaleza verde
+        🔊	altavoz a volumen alto|bocina a volumen alto	corneta sonido
+        🍬	caramelo	chuche chucheria dulce golosina postre
+        💏	beso|pareja besandose	personas romance amor dos romantico
+        🍼	biberon	bebe bibe bibi botella leche mamadera tetero bebida
+        🍜	tazon de fideos	calientes chinos ramen bol china comida hirviendo
+        🐼	panda	cara oso animal bamboo bambu zoologico
+        🙉	mono con los oidos tapados|mono con orejas tapadas	cara mal prohibido animal no escucho oir ruido secreto sordo
+        🐈	gato	gatete minino animal felino gatito mascota
+        🐻	oso	cara animal miel osito
+        🤸	persona haciendo voltereta lateral|persona haciendo una vuelta de carro|persona haciendo vuelta de carro	acrobacia gimnasia pirueta rueda deporte emocion feliz gimnasta voletereta
+        🌝	luna llena con cara	brillante brillar
+        👸	princesa	cuento fantasia hadas cara corona mujer realeza reina persona
+        🍕	pizza	porcion restaurante alimentos comer comida hambre italia peperoni queso rebanada
+        🍌	platano|banana	fruta alimento mono planta potasio
+        🍦	cucurucho de helado|helado en cucurucho|helado en barquillo|nieve en cono	dulce restaurante hielo postre
+        ⚪	circulo blanco	geometria punto geometrico
+        👩	mujer	adulta cara chica persona señora
+        😿	gato llorando|cara de gato llorando	lagrima pena triste llorar llanto
+        🍂	hojas caidas	caida hoja naturaleza otoño
+        📞	auricular de telefono|telefono|auricular	comunicacion llamada llamar analogico voip
+        ⏰	reloj despertador	alarma esperar tiempo
+        🔞	prohibido para menos de 18 años|prohibido para menores de 18	no apto nadie menor dieciocho edad prohibico restriccion
+        🌍	globo terraqueo mostrando europa y africa|globo terraqueo europa africa	mundo planeta tierra
+        🌠	estrella fugaz	lluvia espacio estrellas cayendo
+        🙀	gato asustado|cara de gato asustado	panico preocupacion sorpresa animal felino gran oh dios mio
+        ▪️	cuadrado negro pequeño	geometria geometrico
+        ☁️	nube	tiempo clima nublado
+        👹	demonio japones oni|cara de ogro japones	cuento cuernos sonrisa diablillo diablo fantasia miedo monstruo creatura hadas
+        🍉	sandia	fruta comida patilla planta
+        🐥	pollito de frente	ave pollo animal bebe
+        🌶️	chile picante|pimiento picante|chile	planta comida mexico picoso
+        1️⃣	tecla 1|tecla mayus 1	uno
+        🌵	cactus	planta desierto naturaleza
+        🇮🇳	bandera india
+        👧	niña	chica joven cara nena persona virgo zodiaco
+        🍄	champiñon	hongo seta alucinar mario
+        👮	agente de policia	personas oficial
+        💮	flor blanca	bien hecho sello
+        🐰	cara de conejo	mascota animal
+        🔷	rombo azul grande|diamante azul grande	geometria geometrico
+        🌾	espiga de arroz	planta granos mazorca
+        🔹	rombo azul pequeño|diamante azul pequeño	geometria comic flor petalo geometrico
+        🇹🇷	bandera turquia
+        🥇	medalla de oro|medalla de primer lugar	primero ganador
+        🇮🇹	bandera italia
+        🍪	galleta	dulce pasta postre
+        🇦🇷	bandera argentina
+        🛑	señal de stop|señal de pare|señal de alto	octagono parada
+        🐍	serpiente	culebra reptil vibora animal ofiuco zodiaco
+        🎓	birrete|gorro de graduacion	celebracion grado graduado
+        🇨🇦	bandera canada
+        🍏	manzana verde	fruta poma
+        🦁	leon	cara leo zodiaco animal felino
+        😽	gato besando|gato mandando un beso|cara de gato besando	cariñoso cerrados ojos
+        🚬	cigarrillo	cigarro fumar esta permitido humo señal tabaco
+        🍖	carne con hueso	restaurante cena comida muslo pollo
+        🍴	tenedor y cuchillo|cuchillo y tenedor	restaurante cena cocina comer comida cubiertos delicioso cocinando
+        🆘	simbolo de socorro|auxilio|boton sos	ayuda cuadrado
+        🤜	puño hacia la derecha|puño a la derecha	puñetazo punito
+        🍿	palomitas|palomitas de maiz	cine cotufas pelicula pochoclo
+        🍔	hamburguesa	burger comer comida rapida
+        📝	cuaderno de notas|nota	comunicacion escribir lapiz memo recordatorio memorandum
+        🇯🇵	bandera japon
+        🍮	flan	dulce postre pudding comida quesillo restaurante
+        🍇	uvas	agracejo fruta racimo uva fruto
+        2️⃣	tecla 2|tecla mayus 2	dos
+        🏠	casa	vivienda campo construccion hogar
+        🤰	mujer embarazada	barriga embarazo futura madre hinchada hinchazon inflada llena
+        🐣	pollito rompiendo el cascaron	ave huevo pollo animal nacer nacimiento
+        🐒	mono	macaco simio animal cara chango chimpance
+        👦	niño	joven cara chico nene persona
+        🍩	donut|dona	berlina pastel rosquilla comida dulce postre desayuno
+        🍣	sushi	restaurante cena comer comida japonesa
+        🤛	puño hacia la izquierda|puño a la izquierda	golpe
+        👯	personas con orejas de conejo|personas bailando con orejas de conejo|gente con orejas de conejo	bailar fiesta conejita mujer mujeres
+        🏳️‍🌈	bandera del arcoiris	orgullo lgtb gay homosexual lgtbqia bisexual homesexual lesbiana lgbt trans transgenero
+        ♠️	palo de picas|picas	carta juego cartas juegos naipes pica palos
+        🌲	arbol de hoja perenne	navidad pino siempreverde
+        🐴	cara de caballo	animal perfil granja
+        🍛	arroz con curry	restaurante comida
+        🎆	fuegos artificiales	celebracion festejo fiesta
+        💑	pareja enamorada|hombre y mujer enamorados	amor personas enamoradas corazon
+        🍞	pan de molde|pan	rebanada tostada calorias comida desayuno rodaja trigo barra
+        🍯	tarro de miel	dulce abeja pote
+        ☄️	meteorito	cometa espacio estela estrella rojo
+        😸	gato sonriendo con ojos sonrientes	cara sonriente sonrisa riendo llorando risa
+        🍚	arroz cocido	restaurante china comida japonesa
+        🎬	claqueta	cine entretenimiento pelicula
+        🎙️	microfono de estudio|microfono de grabacion	musica cantante cantar voz
+        🇨🇴	bandera colombia
+        🐳	ballena soltando un chorro|ballena soplando un chorro de agua	animal azul mar marino oceano
+        🦀	cangrejo	animal cancer zodiaco mar crustaceo mariscos
+        🥃	vaso de whisky	chupito copa licor alcohol trago pequeño
+        🔸	rombo naranja pequeño|diamante naranja pequeño|rombo anaranjado pequeño	geometria geometrico
+        💊	pildora	comprimido medicina medico pastilla enfermo medicamento vitamina
+        🐎	caballo	carreras caballos ecuestre animal equino galopar
+        🍹	bebida tropical	bar restaurante coctel mai tai trago verano
+        ♦️	palo de diamantes|diamantes	carta juego cartas diamante juegos naipes palos
+        🔮	bola de cristal	adivinacion buena fortuna adivinar adivino fantasia futuro magia
+        👨	hombre	adulto amigo cara chico muchacho novio persona señor
+        🍸	copa de coctel	bar restaurante alcohol bebida club martini
+        🌏	globo terraqueo mostrando asia y australia|globo terraqueo asia oceania	mundo planeta tierra
+        👴	anciano|hombre mayor	abuelo calvo cara señor viejo yayo adulto
+        🧢	gorra con visera	beisbol cachucha gorro sombrero
+        🐽	nariz de cerdo|hocico de cerdo	cara morro chancho cochinito cochino rosa
+        🐔	gallina	ave gallinacea pollo animal
+        🎻	violin	instrumento musical musica orquesta
+        ⬆️	flecha hacia arriba	direccion norte positivo cardinal
+        ✂️	tijeras	cortar herramienta peluqueria recortar
+        👫	mujer y hombre de la mano	novios pareja amigos esposos heterosexual personas tomandose
+        👣	huellas de pies|huellas	pie pisada cuerpo huella ropa
+        🐯	cara de tigre	animal felino gato
+        🎮	mando de videoconsola|video juegos	juego videojuego control entretenimiento joystick
+        🍵	tazon de te	bebida taza
+        🐦	pajaro	ave pajarillo animal periquito australiano
+        🇬🇧	bandera reino unido
+        〰️	guion ondulado|linea ondulada	marca sonido largo puntuacion
+        👭	mujeres de la mano	lesbianas novias pareja amigas dos hermanas manos homosexual femenina personas amor gemelas tomandose
+        🐬	delfin	cetaceo animal flipper mar oceano playa
+        🍟	patatas fritas|papas fritas	restaurante comida rapida francesa
+        👙	bikini	baño playa ropa bañador nadar pileta piscina traje verano alberca vestimenta
+        ✖️	multiplicacion|signo de multiplicacion	cancelar marca prohibido mutliplicacion
+        📩	sobre con flecha|mensaje saliente	carta comunicacion correo electronico enviado mail email saliendo
+        👵	anciana|mujer mayor	abuela cara señora vieja yaya adulta
+        🍨	helado	postre sorbete
+        🇫🇷	bandera francia
+        🐖	cerdo	cochino gorrino puerco animal chancho chuleta grasa jamon tocineta marrano porcino
+        ✝️	cruz latina	cristianismo religion cristiano iglesia
+        ♻️	simbolo de reciclaje	reciclar señal universal solido reciclado
+        🥊	guante de boxeo	deporte golpear rojo
+        🦅	aguila	ave animal
+        💬	bocadillo de dialogo|globo de dialogo	comic conversacion burbuja hablar idea nube comics
+        🇨🇱	bandera chile
+        🐢	tortuga	galapago animal reptil
+        🔰	simbolo japones para principiante|simbolo japones de principiante	amarillo verde hoja amarilla bandera cheuron
+        🔶	rombo naranja grande|diamante naranja grande|rombo anaranjado grande	geometria geometrico
+        🎗️	lazo conmemorativo|cinta conmemorativa	amarillo conmemoracion
+        💄	pintalabios|lapiz labial	barra cosmetica labios maquillaje cosmeticos
+        👠	zapato de tacon|zapato de taco alto|zapatilla|zapato de tacon alto	mujer tacones zapatos ropa vestimenta
+        🥕	zanahoria	comida verdura vegetal
+        ➖	menos|resta|signo de resta	negativo raya
+        🐺	lobo	cara animal
+        📖	libro abierto	biblioteca educacion escuela leer libreria
+        🍍	piña	ananas fruta anana planta tropical
+        🌃	noche estrellada	estrellas oscuridad
+        ✴️	estrella de ocho puntas	*
+        🌌	via lactea	espacio galaxia cielo estrellas
+        🐓	gallo	ave gallina gallinacea pollo animal galliforme gallinero
+        👂	oreja	cuerpo escuchar oido oir
+        🍤	gamba frita|camarones fritos	frito restaurante camaron comida gabardina gambas japonesa tempura
+        🐐	cabra	capricornio caprino chivo zodiaco animal zoologico
+        🔻	triangulo rojo hacia abajo|triangulo rojo apuntando hacia abajo	geometria geometrico
+        💻	ordenador portatil|laptop	pc personal computadora netbook notebook
+        🦐	gamba|camaron	comida langostino marisco mar oceano paella mariscos
+        🇩🇪	bandera alemania
+        🌛	luna de cuarto creciente con cara	espacio media
+        ↘️	flecha hacia la esquina inferior derecha|flecha hacia el sureste	abajo direccion sudeste
+        ✏️	lapiz	escolar escribir lapicero util
+        🧘	persona en posicion de loto	meditacion yoga calma deporte relajar relax serenidad
+        🥁	tambor	baquetas musica banda palitos
+        🏖️	playa y sombrilla	arena isla mar oceano sol vacaciones verano
+        ⚜️	flor de lis
+        ❕	exclamacion blanca|signo de exclamacion gris|signo de exclamacion blanco	puntuacion sorpresa contorno
+        🅰️	grupo sanguineo a	tipo
+        🚴	persona en bicicleta	ciclismo ciclista andar deporte deportes montar pasear
+        💠	rombo con petalo|diamante en flor|rombo con un punto	geometria adorable comic emocion comico dentro geometrico
+        ㊗️	ideograma japones para enhorabuena	kanji felicidades
+        🐙	pulpo	cefalopodo octopodo animal mar oceano tentaculos
+        ♣️	palo de treboles|treboles	carta juego cartas casino juegos naipes trebol palos
+        🍡	dango|brocheta dulce japonesa	japones pincho postre restaurante bolitas mochi comida bolas
+        ⏩	avance rapido|boton de avance rapido	avanzar doble flecha adelantar musica adelante
+        🎨	paleta de pintor|paleta de pinturas	arte artista pintura entretenimiento
+        🐠	pez tropical	animal mar oceano playa
+        🇰🇷	bandera corea del sur
+        🍗	muslo de pollo|pata de pollo	restaurante cena comida pavo ave corral hueso pierna
+        🚮	señal de usar papelera|cartel cesto de basura|señal cesto de basura	tirar
+        ▫️	cuadrado blanco pequeño	geometria geometrico
+        🌪️	tornado	nube torbellino clima viento
+        😼	gato haciendo una mueca|cara de gato con sonrisa ironica	ironico sarcastico
+        👤	silueta de busto
+        🏊	persona nadando	nadar natacion
+        🌽	espiga de maiz|mazorca de maiz	mijo choclo granja planta elote
+        🎩	sombrero de copa|galera	chistera ropa caballero complementos hombre sombreros
+        🇪🇸	bandera españa
+        🎹	teclado musical	instrumento musica piano
+        🍈	melon	fruta planta
+        ◀️	retroceso|retroceder|boton de retroceso	izquierda triangulo musica flecha
+        ↔️	flecha izquierda y derecha	direccion
+        🏡	casa con jardin	construccion vivienda campo hogar
+        🇵🇰	bandera pakistan
+        🎇	bengala	celebracion fuegos artificiales festejo fiesta luz
+        🥩	corte de carne	chuleta filete bife roja cerdo cordero puerco comida steak
+        🐞	mariquita	cochinilla insecto animal escarabajo jardin naturaleza catarina
+        3️⃣	tecla 3|tecla mayus 3	tres
+        ⬅️	flecha hacia la izquierda	oeste cardinal direccion
+        🌐	globo terraqueo con meridianos	mundo tierra paralelos
+        ↗️	flecha hacia la esquina superior derecha	arriba direccion noreste
+        🍽️	cuchillo y tenedor con un plato|plato y cubiertos|tenedor cuchillo y plato	restaurante cocinando
+        🧀	cuña de queso|queso|pedazo de queso	trozo raton roedor
+        🥦	brocoli	col repollo comida verdura
+        🐜	hormiga	antenas insecto animal
+        ⚔️	espadas cruzadas	arma armas
+        😺	gato sonriendo|cara de gato sonriendo	feliz alegre sonrisa boca abierta felicidad minino
+        🥞	tortitas|hotcakes	comida dulce pancakes postre tortita crepe desayuno panquecas panqueques
+        🏄	persona haciendo surf	surfear cool deporte deportes ola playa surfista
+        🔨	martillo	herramienta
+        🏝️	isla desierta	playa
+        🔆	brillo alto|aumentar brillo|boton brillo alto	brillante señal brillar
+        👥	dos siluetas de bustos
+        👓	gafas|lentes	accesorios ojo ropa articulos graduadas vestimenta anteojos
+        🥒	pepino	comida pepinillo verdura ensalada vegetal vegetales
+        🏈	balon de futbol americano|pelota de futbol americano	deporte juego jugar
+        🇵🇭	bandera filipinas
+        🏋️	persona levantando pesas	halterofilia levantador peso deporte entrenamiento fisicoculturismo gym hacer levantamiento levantar gimnasio
+        0️⃣	tecla 0|tecla mayus 0	cero
+        🚘	coche proximo|auto se aproxima|carro se aproxima	automovil vehiculo rojo transporte
+        🦖	t rex	tiranosaurio animal dinosaurio jurasico jurassic park parque trex tyrannosaurus
+        🌕	luna llena	plenilunio clima espacio fase lunar
+        🎭	mascaras de teatro|artes escenicas	actuacion arte entretenimiento carnaval obra mascara
+        👾	monstruo alienigena	alien cara criatura extraterrestre ovni cuento juego maquinita marcianito espacial espacio fantasia
+        🍳	cocinar|sarten|cocinando	freir huevo cocina frito restaurante desayuno
+        🏵️	roseta	flor planta naturaleza
+        🍧	granizado hawaiano|hielo molido|raspado	helado postre comida dulce frio nieve restaurante raspa
+        🔗	eslabon|eslabones de cadena	enlace enlaces vinculo
+        🕋	kaaba	hach islam musulman religion umrah edificio cubo
+        ☃️	muñeco de nieve con nieve|muñeco de nieve nevado|muñeco de nieve nevando	clima frio hombre invierno
+        🌅	amanecer	salida sol atardecer naturaleza puesta mañana
+        🤴	principe	corona cara cuento hadas fantasia hombre realeza persona
+        🖖	saludo vulcano	mano spock dedos star trek
+        🐊	cocodrilo	caiman animal florida zoologico lagarto reptil
+        🐘	elefante	paquidermo animal
+        🌤️	sol detras de una nube pequeña|soleado con nubes	clima medio nublado tiempo
+        🥑	aguacate	comida fruta guacamole palta
+        🥚	huevo	comida gallina gallo desayuno
+        ⛈️	nube con rayo y lluvia|tormenta	trueno clima tiempo rayos relampagos
+        🐵	cara de mono	animal chango chimpance simio
+        🔜	flecha soon	derecha pronto
+        🍶	sake	bar bebida botella restaurante tazon japones
+        🐄	vaca	bovino res animal granja leche vacuno
+        🇻🇪	bandera venezuela
+        🐮	cara de vaca	animal finca granja leche
+        🦈	tiburon	pez animal mar marino oceano
+        🚲	bicicleta	bici vehiculo ciclista transporte
+        ⛔	direccion prohibida|prohibido entrar	no señal pasar entrada trafico
+        🕯️	vela	luz cera fuego
+        ➕	mas|suma	signo positivo
+        🔺	triangulo rojo hacia arriba|triangulo rojo apuntando hacia arriba	geometria geometrico
+        💇	persona cortandose el pelo|corte de pelo	belleza peluquero cabello cosmetologia estilista peluqueria salon
+        🧠	cerebro	inteligente inteligencia seso sesos
+        📻	radio	musica transmision comunicacion estacion noticias entretenimiento video
+        🥤	vaso con pajita|vaso con popote	refresco zumo agua beber bebida gaseosa soda sorbete jugo
+        🍝	espagueti	pasta restaurante cena comida espaguetis pastas spaguetti italiana
+        🍥	pastel de pescado japones|pastel de pescado	comida japonesa croqueta restaurante narutomaki
+        💴	billete de yen	banco dinero cash efectivo
+        🌬️	cara de viento	nube soplar clima
+        🥓	beicon|tocino	bacon carne comida panceta cerdo tocineta desayuno
+        🙍	persona frunciendo el ceño	fruncido gesto cara
+        ⚓	ancla	barco gancho bote capitan mar marinero navegacion puerto maritimo
+        👰	persona con velo	boda novia
+        🐂	buey	cabestro tauro zodiaco animal toro
+        📽️	proyector de cine	pelicula peliculas video
+        🏅	medalla deportiva	premio campeon deportes ganar oro primer triunfo
+        ⛅	sol detras de una nube|parcialmente nublado	nubes clima tras soleado tiempo
+        🇦🇪	bandera emiratos arabes unidos
+        🇵🇪	bandera peru
+        🧜	persona sirena	triton bajo mar cuento hadas fantasia sireno tridente
+        📮	buzon	cartas correo
+        ⛳	banderin en hoyo	golf agujero deporte juego
+        🔽	triangulo hacia abajo|boton hacia abajo	bajar flecha rojo
+        🚂	locomotora de vapor|locomotora	tren vehiculo ferrocarril transporte viajar viaje
+        🏌️	persona jugando al golf|persona jugando golf	golfista pelota
+        🐇	conejo	conejito gazapo animal liebre mascota
+        🏍️	moto|motocicleta	carreras vehiculo transporte
+        🎲	dado	juego casino azar
+        🥛	vaso de leche	bebida
+        🎣	caña de pescar	entretenimiento esparcimiento pesca pez deporte libre pescado ocio
+        👱	persona adulta rubia	rubias rubio rubios cabello cara humano
+        🎏	banderin de carpas|banderin con forma de carpa|koinobori|banderin en forma de pescado	celebracion bandera festejo japones
+        🕷️	araña	insecto animal
+        🦍	gorila	primate simio animal king kong zoo cara
+        🔘	boton de opcion	radio geometrico
+        🐅	tigre	felino animal fauna gato grande zoologico
+        🏇	carrera de caballos	caballo carreras jinete amazona deporte jockey yoquey
+        🔐	candado cerrado y llave	seguro protegido contraseña seguridad
+        🏩	hotel del amor|motel	edificio alojamiento
+        👺	demonio japones tengu|cara de demonio japones	cuento fantasia monstruo diablo mascara creatura hadas duende
+        🅱️	grupo sanguineo b	tipo
+        🚙	vehiculo deportivo utilitario|vehiculo utilitario deportivo|vehiculo suv	camping caravana furgoneta vacaciones auto automovil carro manejar transporte recreativo recreacional
+        🐧	pinguino	ave animal antartica pajaro bobo polo norte
+        ⚖️	balanza	justicia libra peso zodiaco
+        🎃	calabaza de halloween|calabaza	celebracion linterna auyama cabeza jack noche brujas
+        🌄	amanecer sobre montañas|amanecer en las montañas	montaña salida sol tras atardecer
+        🎾	pelota de tenis|tenis	deporte raqueta
+        🐚	caracola|caracola marina|caracol marino|concha espiral	animal mar oceano playa
+        🎺	trompeta	instrumento musical musica
+        ❇️	chispa	*
+        🎫	tique|boleto	acceso admision billete entrada entretenimiento evento ticket
+        ⌚	reloj	tiempo pulsera
+        🌋	volcan	erupcion volcanica fuego montaña naturaleza
+        💒	iglesia celebrando boda|casamiento en capilla|boda religiosa|boda en capilla	romance ceremonia
+        👳	persona con turbante	cara
+        ❎	boton con marca de cruz|cruz con recuadro	casilla equis tachar verde
+        👟	zapatilla deportiva|zapato deportivo|tenis	calzado correr ropa carrera deporte deportivas vestimenta
+        👃	nariz	cuerpo cara oler olfato
+        🛌	persona en la cama|persona durmiendo	dormir hotel buenas noches cansancio descansar noche siesta zzz
+        🚓	coche de policia|patrulla	vehiculo auto carro patrullero transporte
+        ⏬	triangulo doble hacia abajo	bajar boton flecha
+        📈	grafica de evolucion ascendente|tendencia ascendente	grafico alza aumentar mejor mejorar positivo tabla
+        ⛄	muñeco de nieve|muñeco de nieve sin nevar	clima frio hombre invierno
+        ⏱️	cronometro	reloj esperando esperar segundos tiempo medicion
+        😾	gato enfadado	cara animal cabreado enojado
+        🛫	avion despegando	aeroplano salida aeropuerto despegar despegue partida transporte vacaciones volar
+        🤱	lactancia materna	amamantar bebe dar pecho
+        🍐	pera	fruta perilla alimento
+        ☮️	simbolo de la paz	amor
+        🚃	vagon|tren electrico	ferrocarril tranvia vehiculo ferrocaril transporte viaje
+        ⏳	reloj de arena con tiempo	cayendo temporizador espera inicio
+        🌜	luna de cuarto menguante con cara	creciente espacio noche sueno
+        📹	videocamara	camara video grabacion grabar pelicula
+        🐛	bicho|oruga	gusano insecto animal naturaleza
+        👔	corbata	accesorio ropa camisa oficina uniforme vestimenta
+        👗	vestido	mujer ropa compras moda vestimenta
+        🐌	caracol	caracola molusco animal babosa baboso insecto
+        🎱	bola negra de billar|bola ocho	8 juego pool
+        🌰	castaña	castaño fruto seco almendra indias frutos secos comida planta
+        🌮	taco	comida mexicano mexicana mexico tacos taquitos
+        🕵️	detective	cara espia agente busqueda investigacion lupa persona sombrero investigador investigar
+        🔅	brillo bajo|reducir brillo|boton brillo bajo	señal tenue
+        ✉️	sobre	carta correo comunicacion
+        🇪🇬	bandera egipto
+        🚑	ambulancia	asistencia medica transporte vehiculo emergencia hospital urgencia
+        📦	paquete	caja
+        🤥	cara de mentiroso	nariz pinocho mentir mentira
+        🔄	flechas en sentido antihorario|flechas horizontales en sentido horario|boton de flechas contrasentido horario	direccion señal recarga antisentido contraria sol flecha
+        🤳	selfi|selfie	autofoto camara telefono foto celular movil
+        💲	simbolo de dolar|simbolo de dolar resaltado	dinero cash efectivo moneda pagar divisa divisas
+        🎋	arbol de tanabata	celebracion festividad trozos papel estrellas fiesta japonesa estandarte japones
+        🗓️	calendario de espiral|calendario con espiral	almanaque fechas
+        🤖	robot|cara de robot	monstruo r2d2 robotina
+        🥔	patata|papa	comida verdura vegetal
+        🆗	boton ok	cuadrado señal
+        🔑	llave	contraseña password
+        🇨🇳	bandera china
+        🐤	pollito	ave pollo polluelo animal cara perfil bebe
+        4️⃣	tecla 4|tecla mayus 4	cuatro
+        🐑	oveja	borrego cordero ovino animal granja ovejero hembra
+        ➰	bucle	giro tirabuzon
+        👩‍🎓	estudiante mujer	graduada licenciada universitaria
+        ☂️	paraguas|paraguas abierto	lluvia accesorio clima tiempo ropa
+        🇦🇹	bandera austria
+        🦆	pato	ave animal
+        🚌	autobus	bus transporte colectivo camion ruta vehiculo
+        💿	disco optico	cd blu ray dvd computadora
+        🏥	hospital	doctor edificio medicina medico emergencia urgencia
+        🐋	ballena	cachalote cetaceo animal mar marino oceano orca
+        🚒	coche de bomberos|camion de bomberos	fuego vehiculo carro emergencia transporte
+        🏐	pelota de voleibol	balon juego deporte
+        🇪🇨	bandera ecuador
+        🥐	cruasan|croissant|cuernito	bollo comida frances cachito desayuno medialuna pan
+        🎷	saxofon	instrumento musical musica saxo
+        🗽	estatua de la libertad	nueva ny nyc york estados unidos new
+        🗡️	puñal|daga	arma cuchillo armas
+        🏏	criquet|cricket	juego pelota deporte
+        🐭	cara de raton	animal roedor
+        🙎	persona haciendo pucheros|persona enojada	gesto decepcion disgusto enfado enojo molestia puchero
+        🌑	luna nueva	oscuridad clima espacio negra fase lunar nuev oscuro
+        🚔	coche de policia proximo|patrullero se aproxima|patrulla se aproxima	vehiculo auto carro transporte
+        🇮🇩	bandera indonesia
+        🚿	ducha|regadera	agua baño bañar darse
+        🥝	kiwi	comida fruta desayuno planta
+        🕌	mezquita	islam religion edificio musulman
+        🐀	rata	roedor animal
+        🛡️	escudo	defensa arma proteccion
+        🔒	candado cerrado	cerrar privado protegido seguridad
+        ✳️	asterisco de ocho puntas	*
+        🕶️	gafas de sol|lentes de sol	ojo oscuras anteojos lestes oscuros ropa verano vestimenta
+        👩‍❤️‍💋‍👩	beso mujer y mujer|pareja besandose mujer y mujer	personas romance amor dos romantico
+        🎟️	entradas|boleto de entrada	acceso admision evento ticket tique tiquet boletos tickets
+        🐉	dragon	cuento fantasia animal dracarys juego tronos mitologia
+        🔱	emblema de tridente	ancla barco navegacion neptuno herramienta
+        🔎	lupa orientada hacia la derecha|lupa hacia la derecha	buscar aumento instrumento apuntando
+        🇦🇺	bandera australia
+        ⚰️	ataud	muerte vampiro
+        🐩	caniche|poodle	perrito perro animal french mascota aguas pudle
+        🦑	calamar	comida molusco mar oceano mariscos
+        🧟	zombi|persona zombi	muerto viviente no halloween miedo terror walking dead caminante
+        🆕	boton new	nuevo
+        🦊	zorro	cara animal
+        👕	camiseta	ropa remera vestimenta playera shirt
+        🏹	arco y flecha	arquero sagitario zodiaco arma
+        🇩🇿	bandera argelia
+        👬	hombres de la mano|dos hombres de la mano	gays novios pareja amigos homosexual masculina amor gemelos geminis hombre tomandose manos
+        🍱	caja de bento	comida restaurante cena japonesa
+        📰	periodico	diario comunicacion leer noticias
+        🥋	uniforme de artes marciales	judo karate taekwondo deporte yudo
+        🚤	lancha motora|lancha	barco vehiculo bote capitan marinero yate deporte acuatico transporte
+        🏰	castillo europeo	construccion edificio europa reina rey
+        5️⃣	tecla 5|tecla mayus 5	cinco
+        🦉	buho	ave lechuza pajaro animal noche inteligente sabio
+        🚢	barco	vehiculo capitan crucero mar marinero transporte
+        🌨️	nube con nieve|nieve	frio clima
+        📆	calendario recortable|calendario con hojas|calendario de hojas	fecha 17 almanaque diecisiete arranca
+        🗝️	llave antigua	abrir
+        🎌	banderas cruzadas	celebracion japon
+        🧔	persona con barba	barbas barbudo completa bigote barbon cara hombre
+        💳	tarjeta de credito	compras dinero pagar pago
+        🇺🇾	bandera uruguay
+        🥗	ensalada|ensalada verde	bol comida vegetales verduras
+        ☯️	yin yang	religion taoismo
+        ⚙️	engranaje	herramienta ajustes configuracion rodamiento rodillo diente rueda dentada
+        💶	billete de euro	banco dinero cash fajo billetes
+        ⛩️	santuario sintoista	japon religion sintoismo edificio jinja japones shinto
+        🗻	monte fuji	montaña naturaleza
+        ✒️	pluma negra|lapicera de pluma|pluma de lapicera|plumilla negra	boligrafo escribir tinta nota fuente punta
+        🇺🇲	bandera islas menores alejadas de ee uu|bandera islas ultramarinas de ee uu
+        🇵🇹	bandera portugal
+        🍠	patata asada|batata asada|camote asado	papa restaurante comida planta tuberculo
+        👷	profesional de la construccion|persona obrera de construccion	casco obrero trabajador hombre
+        🛍️	bolsas de compras	bolsa compra rebajas regalo hotel
+        🏎️	coche de carreras|auto de carrera|auto de carreras	automovil carro f1 rapido
+        🔛	flecha on	doble punta palabra encima señal marca
+        🔙	flecha back	atras izquierda
+        🗼	torre de tokio
+        🎖️	medalla militar	celebracion ganador premio grado
+        🚺	señal de aseo para mujeres|simbolo de mujer|señal del baño de las mujeres|baño de mujeres	señoras servicio aseos chicas wc sanitarios
+        🐹	hamster	cara mascota animal roedor
+        🥖	baguete|baguette	barra comida frances pan desayuno
+        🇵🇷	bandera puerto rico
+        🎡	noria de feria|noria|rueda de la fortuna	atracciones entretenimiento vuelta mundo parque diversiones
+        🔍	lupa orientada hacia la izquierda|lupa hacia la izquierda	buscar aumento instrumento apuntando
+        🏟️	estadio	campo cancha concierto deporte espectaculo juego eventos
+        🖥️	ordenador de sobremesa|computadora de escritorio	pc
+        🌭	perrito caliente|salchicha|perro caliente|hot dog	comida pan pancho frankfurter hotdog
+        🇹🇭	bandera tailandia
+        ✡️	estrella de david	judaismo judio religion
+        🏒	hockey sobre hielo	disco palo deporte
+        🛀	persona en la bañera|persona en tina	baño banarse relax
+        📅	calendario	fecha 17 almanaque anillas cita diecisiete reunion
+        🖋️	estilografica|pluma fuente	boligrafo escribir tinta lapicera
+        🇸🇪	bandera suecia
+        🎞️	fotograma de pelicula|cuadros de pelicula|fotograma	cine camara
+        🎪	carpa de circo|circo	entretenimiento espectaculo artistico show
+        🍙	bola de arroz	japones onigiri restaurante comida japonesa
+        🛁	bañera|tina	baño banarse relax
+        📕	libro cerrado	escuela estudiar
+        👒	sombrero de mujer	accesorio ropa jardin verano vestimenta
+        🖇️	clips unidos	union sujeta papeles
+        ❔	interrogacion blanca|signo de interrogacion gris|signo de interrogacion blanco	pregunta puntuacion contorno
+        🎄	arbol de navidad	abeto celebracion
+        🕸️	tela de araña|telaraña
+        🥜	cacahuetes|mani|cacahuate|cacahuates	cacahuete comida fruto seco verdura elefante vegetal
+        🕴️	persona trajeada levitando|persona con traje levitando|persona en traje levitando	levitar negocios negocio
+        🥟	dumpling|empanada	comida gyoza jiaozi masa
+        ↙️	flecha hacia la esquina inferior izquierda|flecha hacia el suroeste	abajo direccion
+        ◾	cuadrado negro mediano pequeño	geometria geometrico
+        🐲	cara de dragon	cuento fantasia animal
+        🏴	bandera negra	ondear
+        🦌	ciervo	bambi cervatillo animal venado
+        🆔	simbolo de identificacion|boton id	identidad
+        👛	monedero	accesorios cartera complementos dinero moneda monedas mujer ropa vestimenta
+        🚚	camion de reparto	mercancias transporte vehiculo
+        ↪️	flecha izquierda curvandose a la derecha	curva direccion
+        🇬🇷	bandera grecia
+        📿	rosario	collar cuentas religion oracion rezar
+        🌫️	niebla|neblina	nube clima nieve tiempo
+        🌂	paraguas cerrado|paraguas	accesorios lluvia clima lluvioso sombrilla ropa
+        🕉️	om	hindu religion
+        🆚	boton vs	contra frente simbolo versus cuadrado
+        📉	grafica de evolucion descendente|tendencia descendente	grafico datos disminuir empeorar negativo peor reducir tabla baja
+        🗨️	bocadillo de dialogo por la izquierda|globo de dialogo izquierdo	burbuja conversacion comic idea comics
+        🛒	carrito de la compra|carrito de compras	carro supermercado abasto tienda carriito
+        📛	etiqueta identificativa|identificacion con nombre|gafete	prendedor rojo
+        🇳🇱	bandera paises bajos
+        🐿️	ardilla	animal nuez
+        🅾️	grupo sanguineo tipo o
+        ☢️	radiactivo	radiactividad radioactividad radioactivo señal zona radiacion cartel
+        🇲🇦	bandera marruecos
+        🐃	bufalo de agua	animal zoologico
+        ⛽	surtidor de gasolina|estacion de gasolina	bomba combustible dispensador gasolinera nafta repostar servicio
+        🅿️	aparcamiento|estacionamiento|boton p	parking letra
+        🦇	murcielago	vampiro animal
+        ⤴️	flecha derecha curvandose hacia arriba	curva direccion
+        ⛵	velero	barco vela yate bote capitan centro turistico mar marinero deporte acuatico transporte hotel resort
+        👞	zapato de hombre	calzado ropa cafe marron pie vestimenta
+        🔓	candado abierto	abrir cerrado seguro
+        🧞	genio	lampara deseos frotar magia pedir
+        ⛰️	montaña|montañas	monte naturaleza
+        📎	clip|clip para hojas	adjunto papel sujetapapeles
+        🦎	lagarto|lagartija	reptil animal
+        🔌	enchufe electrico	corriente electricidad
+        🏳️	bandera blanca	ondear paz
+        🚽	inodoro	baño vater wc poceta escusado retrete
+        🍲	olla de comida	puchero restaurante cazuela comer casera guiso perolo estofado guisado
+        ⚒️	martillo y pico	herramienta herramientas
+        ♊	geminis	gemelos horoscopo zodiaco mellizos
+        👢	bota de mujer	calzado ropa vestimenta zapato
+        🧙	persona maga	bruja brujo hechicera hechicero fantasia hechizo juego rol magia sabiduria
+        🇵🇱	bandera polonia
+        ⛪	iglesia	cristianismo cruz edificio religion bendecido capilla
+        🇧🇪	bandera belgica
+        🎎	muñecas japonesas	celebracion festival hinamatsuri festividad japon muñeca
+        🔖	marcapaginas|separador	marcador etiqueta señalador marcapagina
+        🔋	pila	bateria
+        📡	antena de satelite|antena satelital	comunicacion emision señal
+        🌇	puesta del sol|puesta de sol sobre edificios	amanecer atardecer
+        🏉	balon de rugby|pelota de rugby	deporte
+        👪	familia	hija hijo madre padre mama papa
+        👖	vaqueros|jeans|pantalones de mezclilla	ropa vaquero vestimenta
+        📊	grafico de barras
+        🐆	leopardo	felino animal fauna gato grande zoologico
+        🔁	repetir|boton de repeticion	flechas flecha sentido horario
+        🛩️	avioneta	avion aire vehiculo viajar viaje volar transporte aeroplano
+        🐡	pez globo	animal mar oceano
+        🃏	comodin|carta comodin	joker casino naipes poker
+        👩‍💻	profesional de la tecnologia mujer	desarrolladora informatica programadora tecnologa
+        🌩️	nube con rayo|nubes y relampagos|nube y relampagos	clima relampago trueno rayos
+        🇳🇬	bandera nigeria
+        🐏	carnero	aries morueco zodiaco animal cuernos zoologico macho oveja
+        6️⃣	tecla 6|tecla mayus 6	seis
+        ⛹️	persona botando un balon|persona con una pelota	botar baloncesto basketball basquet basquetbolista deporte jugador jugando
+        🗯️	bocadillo de enfado por la derecha|globo de enojo derecho	cabreo rabia burbuja comics enojado
+        🇨🇭	bandera suiza
+        🍢	brocheta|brocheta de mariscos	japones marisco oden pincho brochetas brochettes comida japonesa restaurante kebab palo
+        🗺️	mapa mundial|mapamundi	mundo atlas
+        🚕	taxi	coche vehiculo auto carro transporte
+        🇷🇺	bandera rusia
+        Ⓜ️	m en circulo|letra m en un circulo	metro
+        ⛱️	sombrilla en la arena	sol playa verano
+        🏫	colegio|escuela	edificio universidad
+        📀	disco dvd|dvd	blu ray cd computadora musica optico
+        🆙	boton up	arriba informacion novedad simbolo cuadrado nueva marca
+        🤼	personas luchando	lucha luchador combate deporte libre luchar pelea persona torneo
+        🐨	koala	cara marsupial animal australia bambu
+        🦂	escorpion	escorpio zodiaco alacran aracnido horoscopo animal insecto venenoso
+        💷	billete de libra	banco dinero cash fajo billetes
+        🥈	medalla de plata|medalla de segundo lugar
+        👨‍💻	profesional de la tecnologia hombre	desarrollador informatico programador tecnologo
+        🛏️	cama	dormir hotel litera habitacion recamara
+        ◼️	cuadrado negro mediano	geometria geometrico
+        🚄	tren de alta velocidad	ave ferrocarril rapido transporte viaje bala
+        🧖	persona en una sauna|persona en sauna	vapor baño cuarto relajacion relax spa
+        🎠	caballo de tiovivo|caballo de carrusel	entretenimiento calesita
+        🐁	raton	roedor rata animal
+        🗳️	urna con papeleta	voto elecciones votacion
+        🏮	lampara japonesa|farol de papel japones|linterna de papel roja	izakaya restaurante roj luz
+        🥪	sandwich	bocadillo bocata emparedado comida pan sanduche
+        🌥️	sol detras de una nube grande|nublado	clima tiempo
+        🚪	puerta	armario closet entrada
+        ㊙️	ideograma japones para secreto	kanji
+        🗞️	periodico enrollado	noticias papel diario leer
+        👨‍⚕️	profesional sanitario hombre	doctor enfermero medico terapeuta
+        🖊️	boligrafo|lapicera	boli escribir lapicero nota pluma
+        ⬛	cuadrado negro grande	geometria geometrico
+        🆒	boton cool	mola cuadrado genial interesante simbolo
+        🇨🇺	bandera cuba
+        🥧	pastel|pay	masa relleno comida pie calabaza frutos limon manzana tarta reposteria
+        👩‍⚕️	profesional sanitario mujer	doctora enfermera medica sanitaria terapeuta
+        🇳🇮	bandera nicaragua
+        👨‍🎓	estudiante hombre	graduado licenciado universitario
+        🚧	obras|señal de construccion	cartel peligro
+        ⛓️	cadenas	cadena
+        🛵	scooter|motoneta	escuter moto vespa
+        🥅	porteria	deporte red arco futbol
+        🚅	tren bala	shinkansen vehiculo velocidad ave ferrocarril rapido transporte viajar viaje
+        🖼️	cuadro enmarcado	marco museo arte montana naturaleza pintura
+        ♿	simbolo de silla de ruedas|acceso para silla de ruedas|señal de acceso para silla de ruedas	sillas minusvalidos
+        📏	regla|regla recta	angulo medida medir
+        🀄	dragon rojo de mahjong	juego ficha mosaico
+        🖌️	pincel	pintar arte artista
+        🉐	ideograma japones para ganga	kanji oferta
+        📬	buzon abierto con la bandera levantada|buzon abierto bandera levantada	contenido bajada vacio carta correo
+        🚁	helicoptero	aspas rotores vehiculo volar transporte viajar viaje
+        🗑️	papelera	basura cubo cesta cesto papeles
+        🤵	persona con esmoquin	novio pareja
+        🏷️	etiqueta
+        🌡️	termometro	temperatura calor clima fiebre verano
+        🎐	campanilla de viento	furin fuurin
+        🇯🇲	bandera jamaica
+        🦒	jirafa	manchas animal
+        🎒	mochila escolar|mochila	colegio bolso escuela estudiar maletin backpack
+        🇵🇾	bandera paraguay
+        🇺🇦	bandera ucrania
+        🇲🇨	bandera monaco
+        🥉	medalla de bronce|medalla de tercer lugar	tercero
+        7️⃣	tecla 7|tecla mayus 7	siete
+        ⌛	reloj de arena sin tiempo	temporizador acabo agotado
+        🌒	luna creciente|luna nueva visible	cuarto espacio clima menguante
+        🥥	coco	palmera piña colada fruta
+        🎅	papa noel|santa claus	celebracion cuento fantasia feliz fiestas navidad padre fiesta
+        🧕	mujer con hiyab	pañuelo mantilla cabeza pañoleta
+        🛐	lugar de culto	religion oracion
+        ♋	cancer	cangrejo horoscopo zodiaco
+        🧑	persona adulta|persona	genero neutro no especificado
+        🇩🇴	bandera republica dominicana
+        🇮🇪	bandera irlanda
+        🛸	platillo volante|platillo volador	ovni extraterrestre objeto no identificado
+        🧒	infante|joven	crio genero neutro menor neutral niñez persona no especificado
+        📧	correo electronico	comunicacion sobre carta mail email
+        🥢	palillos|palillos chinos	cubiertos hashi
+        🎢	montaña rusa	atracciones entretenimiento feria parque diversion diversiones
+        🐪	dromedario	camello desierto joroba animal camelido
+        🇮🇱	bandera israel
+        👨‍🍳	chef hombre	cocinero pinche
+        🚛	camion articulado|trailer|tractocamion	vehiculo acoplado transporte carga
+        🥄	cuchara	cubiertos cucharilla cubierto cucharita sopa
+        🤹	persona haciendo malabares|malabarista	equilibrio malabarismo circo equilibrar multitareas multitasking habilidad
+        🏢	edificio de oficinas	construccion
+        💈	poste de barbero|barberia|peluqueria|signo de barberia	peluquero
+        👘	kimono	japones ropa vestido vestimenta
+        🇳🇴	bandera noruega
+        🇬🇭	bandera ghana
+        🏔️	montaña con nieve|montañas nevadas	frio naturaleza
+        〽️	marca de alternancia|alternancia
+        🚦	semaforo|semaforo vertical	luz señales trafico luces transito
+        🇿🇦	bandera sudafrica
+        🇹🇳	bandera tunez
+        💼	maletin	cartera documentos maleta portadocumentos bolso hombre portafolio
+        ♈	aries	carnero horoscopo zodiaco
+        🦓	cebra	raya animal zebra
+        🚻	señal de aseos|señal de baño|baño	servicios wc bano publico sanitarios
+        🎰	maquina tragaperras|tragamonedas|maquina tragamonedas	juego apostar apuesta apuestas casino vegas
+        ◽	cuadrado blanco mediano pequeño	geometria geometrico
+        🦗	grillo	saltamontes bicho chapul chapulin insecto ortoptero animal
+        🤾	persona jugando al balonmano|handball|persona jugando handball	balonmanista atletico balon deporte lanzamiento mano pelota tiro
+        👚	ropa de mujer	blusa camisa femenina moda vestimenta
+        👡	sandalia de mujer	calzado ropa vestimenta zapateria
+        ⛏️	pico	herramienta mina mineria
+        9️⃣	tecla 9|tecla mayus 9	nueve
+        🛎️	timbre de hotel|campanilla de hotel	botones campana motel
+        🐗	jabali	cerdo salvaje animal granja
+        🌦️	sol detras de una nube con lluvia|soleado con lluvia	clima tiempo
+        🇸🇦	bandera arabia saudi|bandera arabia saudita
+        🚹	aseo para hombres|simbolo de hombre|señal del baño de los hombres|baño de hombres	caballeros servicio aseos chicos wc sanitarios
+        🇾🇪	bandera yemen
+        ☪️	media luna y estrella|estrella y creciente	islam religion musulman
+        🤺	persona haciendo esgrima|esgrimista	espada
+        🚣	persona remando en un bote	barca remo canoa deporte pescar remar
+        🗿	estatua moai|estatua de la isla de pascua|estatua de isla de pascua
+        🥘	paella|sarten hondo con comida	arroz españa gambas marisco paellera receta valencia casserole
+        🇩🇰	bandera dinamarca
+        🦕	sauropodo	braquiosaurio brontosaurio diplodocus animal brontosaurus dinosaurio jurasico jurassic park parque
+        🇱🇷	bandera liberia
+        🏕️	camping|campamento	acampada vacaciones acampar carpa
+        ☣️	riesgo biologico|peligro biologico	señal
+        🌆	ciudad al atardecer	edificios paisaje anochecer verano noche puesta sol
+        ↕️	flecha arriba y abajo	direccion
+        📨	sobre entrante|mensaje entrante	carta comunicacion correo electronico recibido
+        🏨	hotel	alojamiento edificio turismo
+        🕹️	joystick|palanca de control	juego mando videojuego video
+        👩‍🍳	chef mujer	cocinera pinche
+        🇨🇮	bandera cote d ivoire|bandera costa de marfil
+        📯	corneta de posta|corneta de correo	clarin instrumento musica
+        👜	bolso	accesorios complementos bolsa mano cartera mujer ropa vestido vestimenta
+        🏘️	casas|viviendas	edificio urbanizacion vecino
+        🐫	camello|camello de dos jorobas	bactriano desierto dromedario animal camelido joroba
+        ⛺	tienda de campaña|carpa|casa de campaña	camping vacaciones acampar campamento
+        👩‍🏫	docente mujer	educadora instructora maestra profesora
+        🕳️	agujero	orificio negro hueco comics pozo
+        🏯	castillo japones	construccion edificio
+        🌓	luna en cuarto creciente	espacio clima noche fase lunar
+        🌉	puente de noche	nocturno
+        8️⃣	tecla 8|tecla mayus 8	ocho
+        💂	guardia	real britanica palacio sombrero inglesa
+        🔉	altavoz a volumen medio|bocina a volumen medio	encendido
+        👨‍👩‍👧‍👦	familia hombre mujer niña niño|familia hombre mujer niña y niño	hija hijo madre padre mama papa
+        🇪🇺	bandera union europea
+        🚜	tractor	agricultura vehiculo campo trabajo
+        🔕	campana con signo de cancelacion	ruido modo no hacer prohibido tocar campanas silencio tachada callado
+        📥	bandeja de entrada	comunicacion correo recibido carta entrante recibidos
+        🌔	luna gibosa creciente	clima espacio fase lunar
+        🏙️	paisaje urbano	ciudad edificio edificios rascacielos
+        🥨	bretzel|pretzel	galleta salada comida trenza
+        🇲🇾	bandera malasia
+        📘	libro azul	educacion escuela estudiar leer
+        📗	libro verde	educacion escuela estudiar leer
+        📜	pergamino	papel documento titulo
+        ♏	escorpio	escorpion horoscopo zodiaco
+        🇧🇴	bandera bolivia
+        🏜️	desierto	arena amarillo atardecer calor oasis paisaje sol verano seco sequia
+        🍘	galleta de arroz
+        🛬	avion aterrizando	aeroplano llegada aeropuerto arribo aterrizaje aterrizar despegar transporte
+        🌯	burrito	comida mexicano tex mex wrap comer mexicana
+        🏗️	construccion|edificio en construccion	obra
+        🏴󠁧󠁢󠁥󠁮󠁧󠁿	bandera inglaterra
+        🚼	señal de bebe	cambiar lactancia bordo cambiador estacion bebes cambio
+        🏞️	parque nacional	atraccion montaña vacaciones naturaleza
+        🔈	altavoz a volumen bajo|bocina a volumen bajo	corneta sonido
+        🕰️	reloj de sobremesa|reloj de repisa	decoracion despertador tiempo
+        🏓	tenis de mesa	juego pelota ping pong deporte paleta raqueta
+        🇨🇷	bandera costa rica
+        👨‍🌾	profesional de la agricultura hombre|granjero hombre	agricultor campo labrador
+        🦃	pavo	ave accion gracias animal
+        🔦	linterna	luz herramienta
+        🔃	flechas verticales en sentido horario	señal recarga flecha
+        🇸🇻	bandera el salvador
+        🛳️	barco de pasajeros	vehiculo capitan mar marinero transporte
+        🌘	luna menguante|luna creciente menguante	clima fase lunar creciene
+        🇧🇩	bandera banglades
+        🧛	vampiro	dracula muerto viviente no colmillos halloween miedo sangre susto vampir
+        👩‍❤️‍👩	pareja enamorada mujer y mujer|hombre y mujer enamorados mujer y mujer	amor personas enamoradas corazon
+        🔚	flecha end	final izquierda fin
+        🔟	teclas 10|tecla 10
+        ℹ️	informacion	oficina simbolo
+        🛢️	barril de petroleo|tambor de petroleo	bidon tambo
+        🏴󠁧󠁢󠁳󠁣󠁴󠁿	bandera escocia
+        🇸🇩	bandera sudan
+        🔭	telescopio	astronomia instrumento ciencia espacio microscopio observatorio
+        🇮🇶	bandera irak
+        🎍	decoracion de pino|adorno para pinos|adorno para pino	año nuevo japones bambu celebracion kadomatsu vegetal japonesa
+        🥣	cuenco con cuchara|tazon con cuchara	cereal desayuno avena bol plato hondo sopa
+        🌗	luna en cuarto menguante	clima espacio fase lunar
+        ↖️	flecha hacia la esquina superior izquierda	arriba direccion noroeste intercardinal
+        🎳	bolos|boliche	bola juego bolera bowling
+        👨‍❤️‍💋‍👨	beso hombre y hombre|pareja besandose hombre y hombre	personas romance amor dos romantico
+        👨‍🏫	docente hombre	educador instructor maestro profesor
+        📄	pagina hacia arriba|documento|pagina viendo hacia arriba	anverso frente hoja delante papel
+        🇶🇦	bandera catar
+        👨‍👩‍👧	familia hombre mujer niña|familia hombre mujer y niña	hija hijo madre padre mama papa
+        🎚️	control de volumen|control deslizante	fader deslizar musica nivel
+        🛠️	martillo y llave inglesa	herramienta
+        🆓	boton free|gratis	simbolo cuadrado libre
+        🇵🇸	bandera territorios palestinos
+        🏛️	edificio clasico	monumento roma romano
+        ♐	sagitario	arquero horoscopo zodiaco
+        🧦	calcetines	pies ropa calceta calceton media medias tines vestimenta
+        🗾	mapa de japon
+        👩‍🌾	profesional de la agricultura mujer|granjera mujer	agricultora campo labradora
+        🎑	ceremonia de contemplacion de la luna|ceremonia japonesa	celebracion tsukimi otsukimi
+        🇬🇹	bandera guatemala
+        🧤	guantes	mano miton vestimenta
+        🧝	elfo|duende	magico encanto fantasia folclore legolas magia mistico
+        ➿	bucle doble	japon llamada gratuita giro
+        🇻🇳	bandera vietnam
+        📒	libro de contabilidad	cuaderno
+        ♉	tauro	buey horoscopo toro zodiaco
+        ♓	piscis	horoscopo pescado pez zodiaco
+        🚭	prohibido fumar	no señal
+        🔧	llave inglesa	herramienta mecanico
+        ♌	leo	horoscopo leon zodiaco
+        ↩️	flecha derecha curvandose a la izquierda	curva direccion
+        ♒	acuario	agua horoscopo zodiaco aguador
+        🏦	banco	banca edificio
+        🈵	ideograma japones para completo|ideograma japones para sin vacantes|ideograma japones para no vacante	kanji lleno
+        🥫	comida enlatada	conserva lata bote enlatado enlatados envase
+        🌖	luna gibosa menguante	clima espacio fase lunar
+        🛴	patinete|monopatin|patin del diablo	scooter
+        🚖	taxi proximo|taxi se aproxima	vehiculo amarillo coche transporte
+        🥙	pan relleno|pita rellena	comida durum falafel kebab gyro arabe
+        🛰️	satelite	espacio vehiculo comunicacion
+        🦏	rinoceronte	paquidermo animal cabeza zoologico
+        🇸🇬	bandera singapur
+        ⏺️	grabar|boton grabar	circulo musica punto
+        🖍️	lapiz de cera|crayon	color creyon dibujar pintar pintura colorear crayola
+        ⛸️	patin de hielo|patinaje sobre hielo	deporte
+        📙	libro naranja|libro anaranjado	educacion escuela estudiar leer
+        👲	persona con gorro chino	gua pi mao sombrero
+        🏂	practicante de snowboard|snowboard|persona en snowboard	nieve deporte tabla
+        *️⃣	teclas *|tecla *
+        🔲	boton cuadrado con borde negro|cuadrado blanco con borde negro|boton cuadrado negro	geometria geometrico marco
+        🇭🇺	bandera hungria
+        🚐	minibus	autobus bus transporte combi manjera van viaje
+        👨‍❤️‍👨	pareja enamorada hombre y hombre|hombre y mujer enamorados hombre y hombre	amor personas enamoradas corazon
+        🔇	altavoz silenciado|bocina silenciada	marca cancelacion mute silencio corneta sonido voz selenciada volumen
+        🦔	erizo	espinas puas animal
+        🔯	estrella de seis puntas	adivinacion buena fortuna estrellas david hexagrama
+        🚵	persona en bicicleta de montaña	ciclista mountain bike bici ciclismo deporte montando
+        🚯	prohibido tirar basura	señal no
+        🕛	12 en punto|doce en punto	00 reloj hora tiempo
+        📼	cinta de video|videocasete|videocassette	vhs
+        🧓	persona mayor|adulto mayor	genero neutro no especificado maduro vieja
+        🎛️	ruedas de control|perillas|botones de control	diales musica potenciometros volumen
+        🇨🇿	bandera chequia
+        🇭🇰	bandera rae de hong kong china
+        💺	asiento de transporte	plaza silla
+        👩‍🎤	cantante mujer	artista estrella rock
+        ⛲	fuente	agua
+        ⚛️	simbolo de atomo	ateo atomico
+        🕒	3 en punto	00 reloj tres tiempo
+        📶	barras de cobertura	antena celular movil señal telefono intensidad barra
+        🚋	vagon de tranvia	vehiculo transporte
+        🇱🇧	bandera libano
+        📠	maquina de fax	comunicacion
+        🚇	metro	subterraneo suburbano transporte subte
+        ⏲️	temporizador	reloj segundos tiempo medicion timer
+        ⏪	retroceso rapido|boton de retroceso rapido	flecha doble izquierda rebobinado rebobinar atras musica retroceder
+        🇰🇼	bandera kuwait
+        🛃	aduana	aeropuerto control pasaporte
+        🇭🇳	bandera honduras
+        👨‍✈️	piloto hombre	avion capitan vuelo
+        📓	cuaderno	libreta escuela estudiar negro
+        👩‍👧	familia mujer y niña	hija hijo madre padre mama papa
+        ♎	libra	balanza escala horoscopo justicia zodiaco
+        🏑	hockey sobre hierba	juego palo pelota cesped deporte
+        📋	portapapeles	papeles pinza tabla carpeta lista pedido sujetapapeles tablon
+        🔼	triangulo hacia arriba|boton triangulo hacia arriba	flecha rojo
+        🇨🇵	bandera isla clipperton
+        🇯🇴	bandera jordania
+        📃	pagina doblada|documento doblado	hoja papel
+        🔬	microscopio	instrumento laboratorio biologia experimento investigacion
+        🇫🇮	bandera finlandia
+        🚥	semaforo horizontal	luz señales trafico luces transito
+        🇱🇰	bandera sri lanka
+        ♍	virgo	horoscopo zodiaco virgen
+        🇵🇦	bandera panama
+        🇸🇾	bandera siria
+        🚾	aseos|servicios	lavabo wc baño banos señal agua sanitarios
+        🇭🇷	bandera croacia
+        🇳🇿	bandera nueva zelanda
+        🚍	autobus proximo|autobus se aproxima	vehiculo bus colectivo llegada micro transporte
+        🏸	badminton	pluma raqueta volante deporte gallito juego
+        🔳	boton cuadrado con borde blanco|cuadrado negro con borde blanco|boton cuadrado blanco	marco geometrico
+        🛂	control de pasaportes|inspeccion de pasaportes	aduana aeropuerto
+        📵	prohibido el uso de moviles|no se permiten celulares	movil hacer llamadas telefono celular prohibidos
+        ⛑️	casco con una cruz blanca|casco con cruz blanca	ayuda cara rescatista sombrero
+        🏚️	casa abandonada|edificio abandonado	deshabitada inhabitada vacia
+        🎽	camiseta sin mangas|camiseta para correr	banda deporte azul franelilla musculosa
+        🚰	agua potable	grifo señal
+        🏪	tienda 24 horas|tienda de conveniencia	edificio establecimiento comestibles 7 siempre abierto
+        ⛷️	persona esquiando	esqui esquiador nieve deporte ski esquiar
+        👩‍💼	oficinista mujer|profesional mujer	directora ejecutiva empresa oficina
+        ♑	capricornio	cabra horoscopo zodiaco
+        🇨🇲	bandera camerun
+        🇱🇾	bandera libia
+        ⏫	triangulo doble hacia arriba|boton triangulo doble hacia arriba	flecha
+        🏣	oficina de correos japonesa|oficina de correo japonesa	edificio japon
+        🚉	estacion de tren	ferrocarril transporte tranvia viaje
+        🛅	consigna|deposito de equipaje	servicio locker señal
+        ⚕️	simbolo de medicina	asclepio esculapio serpiente farmacia medicos baston
+        ⛴️	ferri|transbordador	barco ferry bote capitan crucero mar marinero transporte trasbordador
+        👁️‍🗨️	ojo en bocadillo de texto|ojo en una burbuja de texto|ojo en un globo de texto	testigo
+        🏧	señal de cajero automatico|cajero automatico|cartel de cajero automatico	atm banco cuadrado dinero
+        ◻️	cuadrado blanco mediano	geometria vacio geometrico
+        👩‍🔬	profesional de la ciencia mujer	biologa cientifica fisica quimica
+        ⏹️	detener|boton detener	cuadrado parar musica stop
+        🇷🇴	bandera rumania
+        👩‍👦	familia mujer y niño	hija hijo madre padre mama papa
+        ⬜	cuadrado blanco grande	geometria geometrico
+        #️⃣	teclas #|tecla #
+        🇦🇱	bandera albania
+        🇹🇼	bandera taiwan
+        🛣️	autopista	carretera autovia
+        🏤	oficina de correos europea|oficina de correo europea	edificio europa
+        🛄	recogida de equipajes|reclamo de equipaje	maleta
+        🇮🇸	bandera islandia
+        🏬	grandes almacenes|centro comercial|tienda departamental	comercio almacen comprar edificio shopping
+        👨‍🎤	cantante hombre	artista estrella rock
+        🕐	1 en punto|una en punto	00 reloj tiempo
+        🎦	cine|filmar	entretenimiento pelicula boton camara simbolo grabar
+        👨‍💼	oficinista hombre|profesional hombre	director ejecutivo empresa oficina
+        💹	mercado al alza|mercado en alza|grafica de alza con yen	alcista tabla grafico tendencia crecimiento dinero
+        ☸️	rueda del dharma|dharma	budismo religion
+        📴	telefono movil apagado|celular apagado	apagar
+        📐	escuadra	regla triangular triangulo angulo
+        🖱️	raton de ordenador|mouse	accesorio computadora pc
+        🇭🇹	bandera haiti
+        🇸🇳	bandera senegal
+        🔩	tornillo y tuerca|perno con tuerca	herramienta mecanico
+        🈲	ideograma japones para prohibido	kanji
+        🎴	cartas de flores|carta|cartas juego de flores	flor hanafuda naipe japones
+        📳	modo vibracion	movil telefono celular vibrar
+        ☦️	cruz ortodoxa	religion cristianismo iglesia curz
+        🚆	tren	ferrocarril vehiculo chu transporte viajar viaje
+        📁	carpeta de archivos	archivo folder
+        📔	cuaderno con tapa decorativa	decoracion decorado
+        🇦🇫	bandera afganistan
+        👩‍🎨	artista mujer	paleta pintora pinturas
+        🕑	2 en punto	00 dos reloj tiempo
+        🚸	niños cruzando|cruce de niños	señal cruzar niña niño peaton trafico
+        🧣	bufanda	abrigo cuello abrigate chalina cubrecuello foulard frio fular pañuelo pashmina vestimenta
+        👨‍🚀	astronauta hombre	cohete espacio
+        🇧🇭	bandera barein
+        🏭	fabrica	edificio industria
+        🏺	anfora|vasija	acuario beber jarra zodiaco bebida cocinando
+        🇬🇳	bandera guinea
+        🤽	persona jugando al waterpolo	waterpolista agua deporte acuatico deportista polo
+        🛥️	barco a motor	vehiculo bote mar marinero
+        🇲🇱	bandera mali
+        🌁	bruma|niebla	montaña neblina
+        🤶	mama noel	celebracion claus cuento fantasia feliz fiestas madre navidad santa fiesta sra señora
+        🇦🇿	bandera azerbaiyan
+        💽	minidisc|minidisco|disco duro	md computadora musica ordenador pc
+        🇦🇴	bandera angola
+        🚎	trolebus	transporte tranvia
+        🇮🇷	bandera iran
+        🇳🇵	bandera nepal
+        🗒️	bloc de notas de espiral|bloc de notas con espiral	cuaderno anotador escribir
+        🇨🇩	bandera republica democratica del congo
+        🛋️	sofa y lampara	hotel sala espera
+        ⌨️	teclado	ordenador accesorio computadora pc
+        🆎	grupo sanguineo ab	tipo
+        🧗	persona escalando	alpinista escalador deporte escalada escalar montana montaña rapel
+        🧥	abrigo	chaqueton campera chamarra chaqueta chompa frio vestimenta
+        🇰🇪	bandera kenia
+        🛶	canoa	barca barco piragua bote remo deporte acuatico transporte
+        📑	marcadores|pestañas de marcador|etiquetas separadoras	marcapaginas
+        👝	bolso de mano	accesorios cartera complementos bolsa ropa sobre vestimenta
+        🇦🇲	bandera armenia
+        ⏯️	reproducir o pausa|pausar o reproducir|boton de reproduccion o pausa	triangulo musica video derecha flecha
+        🇬🇪	bandera georgia
+        💱	cambio de divisas	dinero divisa moneda banco dolar yen
+        👨‍🎨	artista hombre	paleta pintor pinturas
+        🇧🇬	bandera bulgaria
+        🇪🇦	bandera ceuta y melilla
+        👩‍⚖️	fiscal mujer|juez mujer	jueza justicia magistrada
+        🕓	4 en punto	00 cuatro reloj tiempo
+        👩‍🚀	astronauta mujer	cohete espacio
+        🚞	ferrocarril de montaña	vehiculo transporte tren viajar viaje
+        👨‍🚒	bombero hombre	apagafuegos camion manguera
+        🆖	boton ng	nuevo no bueno not good simbolo
+        🔀	reproduccion aleatoria|boton de reproduccion aleatoria	cruzado flechas entrecruzadas flecha
+        👨‍🔬	profesional de la ciencia hombre	biologo cientifico fisico quimico
+        👨‍⚖️	fiscal hombre|juez hombre	justicia magistrado
+        👨‍👩‍👦‍👦	familia hombre mujer niño niño|familia hombre mujer niño y niño	hija hijo madre padre mama papa
+        🏴󠁧󠁢󠁷󠁬󠁳󠁿	bandera gales
+        🥠	galleta de la fortuna	adivinacion profecia supersticion comida suerte galletita
+        🚳	bicicletas prohibidas|no se permiten bicicletas	bicicleta prohibido vehiculo permitidas señal moto
+        🇧🇯	bandera benin
+        🇲🇬	bandera madagascar
+        🇪🇪	bandera estonia
+        ⏭️	pista siguiente|avanzar a la pista siguiente|boton pista siguiente	raya vertical triangulos adelantar derecha musica triangulo flecha escena
+        🕎	menora	candelabro religion judaismo judio vela
+        🈚	ideograma japones para gratis	kanji
+        🚡	teleferico	aereo tranvia vehiculo cabina colgante montaña telecabina tren carro gondola
+        🕕	6 en punto	00 reloj seis tiempo
+        🇷🇸	bandera serbia
+        🉑	ideograma japones para aceptable	kanji
+        📂	carpeta de archivos abierta	archivo archivar
+        🇹🇿	bandera tanzania
+        📫	buzon cerrado con la bandera levantada|buzon cerrado bandera levantada	contenido subida lleno correo postal
+        🕘	9 en punto	00 nueve reloj tiempo
+        🚊	tranvia	transporte trolebus tren ligero
+        🚈	tren ligero	ferrocarril transporte monorriel viaje
+        🔂	repetir una vez|boton de una repeticion	flechas uno flecha musica solo sentido horario
+        ➗	division|signo de division	dividir matematicas
+        🕗	8 en punto	00 ocho reloj tiempo
+        👨‍👩‍👧‍👧	familia hombre mujer niña niña|familia hombre mujer niña y niña	hija hijo madre padre mama papa
+        🈹	ideograma japones para descuento	kanji
+        🇱🇺	bandera luxemburgo
+        🛤️	via de tren|vias	camino ferrocarril rieles transporte
+        🇺🇬	bandera uganda
+        🕖	7 en punto	00 reloj siete
+        🈴	ideograma japones para aprobado	kanji
+        👨‍🔧	profesional de la mecanica hombre	electricista fontanero mecanico operario
+        🔏	candado con pluma estilografica|candado y lapicera|candado cerrado con plumilla	privacidad protegido contra escritura punta tinta
+        🇧🇼	bandera botsuana
+        🚷	prohibido el paso de peatones	peaton señal no
+        🇲🇰	bandera macedonia del norte
+        🇱🇻	bandera letonia
+        🕙	10 en punto	00 diez reloj tiempo
+        🇹🇹	bandera trinidad y tobago
+        🇱🇹	bandera lituania
+        👩‍❤️‍💋‍👨	beso mujer y hombre|pareja besandose mujer y hombre	personas romance amor dos romantico
+        👨‍👧	familia hombre y niña	hija hijo madre padre mama papa
+        📟	busca|buscapersonas|biper	comunicacion localizador mensafono pager
+        👩‍✈️	piloto mujer	avion capitana vuelo
+        ⏸️	pausa|boton pausa	barras vertical musica pausar verticales barra doble
+        👩‍🚒	bombera	apagafuegos mujera camion manguera
+        🇿🇼	bandera zimbabue
+        🥡	caja para llevar	recipiente restaurante comida domicilio palillos chinos
+        🇸🇰	bandera eslovaquia
+        🕔	5 en punto	00 cinco reloj tiempo
+        🇴🇲	bandera oman
+        💾	disquete	disco 3 1 2 computadora diskette floppy ordenador
+        📤	bandeja de salida	comunicacion correo enviado carta enviados saliente
+        ⚗️	alambique	herramienta quimica destilar
+        🔠	letras latinas mayusculas	abcd abecedario alfabeto entrada latin
+        🚝	monorrail|monorriel	ferrocarril monocarril transporte tren
+        🆑	borrar|boton cl	simbolo recuadrado cuadrado
+        🇲🇲	bandera myanmar birmania
+        👨‍👦	familia hombre y niño	hija hijo madre padre mama papa
+        🇲🇹	bandera malta
+        🕚	11 en punto	00 once reloj tiempo
+        🇧🇦	bandera bosnia y herzegovina|bandera bosnia herzegovina
+        👩‍👧‍👦	familia mujer niña niño|familia mujer niña y niño	hija hijo madre padre mama papa
+        🎿	esquis	esqui esquies nieve deporte esquiar
+        🔤	alfabeto latino	abc abecedario ingles letras
+        🈶	ideograma japones para de pago|ideograma japones para no gratis	kanji
+        🚱	agua no potable	beber seco
+        🚏	parada de autobus	bus colectivo
+        🇳🇪	bandera niger
+        👩‍🔧	profesional de la mecanica mujer	electricista fontanera operaria
+        🇧🇸	bandera bahamas
+        🕍	sinagoga	judaismo religion edificio signagoga templo
+        🇰🇭	bandera camboya
+        🔢	numeros	1234 digitos entrada
+        🇨🇾	bandera chipre
+        📭	buzon abierto con la bandera bajada|buzon abierto bandera baja	vacio subida lleno correo postal
+        📪	buzon cerrado con la bandera bajada|buzon cerrado bandera baja	vacio carta correo
+        🈳	ideograma japones para vacante	kanji
+        🇲🇷	bandera mauritania
+        👩‍❤️‍👨	pareja enamorada mujer y hombre|hombre y mujer enamorados mujer y hombre	amor personas enamoradas corazon
+        👩‍👩‍👧	familia mujer mujer niña|familia mujer mujer y niña	hija hijo madre padre mama papa
+        🇰🇿	bandera kazajistan
+        🖨️	impresora	ordenador accesorio computadora impresion imprimir
+        ⏮️	pista anterior|ultima pista|boton ultima pista	atras escena triangulo musica flecha
+        🇬🇾	bandera guyana
+        🇸🇮	bandera eslovenia
+        🇧🇾	bandera bielorrusia
+        🇸🇴	bandera somalia
+        🕠	cinco y media	5 30 reloj tiempo hora treinta
+        🇦🇼	bandera aruba
+        🖲️	bola de desplazamiento|rueda de desplazamiento	ordenador trackball accesorio computadora pc raton
+        ⚱️	urna funeraria	muerte cenizas funeral
+        🇲🇪	bandera montenegro
+        🇿🇲	bandera zambia
+        🇧🇧	bandera barbados
+        🇹🇯	bandera tayikistan
+        🇨🇬	bandera congo|bandera republica del congo
+        🇺🇿	bandera uzbekistan
+        🇸🇱	bandera sierra leona
+        🇳🇦	bandera namibia
+        🚟	ferrocarril de suspension|tren colgante	vehiculo transporte
+        🇧🇮	bandera burundi
+        🇽🇰	bandera kosovo
+        🇦🇮	bandera anguila
+        🇪🇹	bandera etiopia
+        👩‍👩‍👧‍👧	familia mujer mujer niña niña|familia mujer mujer niña y niña	hija hijo madre padre mama papa
+        🇦🇬	bandera antigua y barbuda
+        👨‍🏭	profesional industrial hombre	fabrica montaje obrero operario trabajador
+        👩‍👧‍👧	familia mujer niña niña|familia mujer niña y niña	hija hijo madre padre mama papa
+        👨‍👨‍👧‍👧	familia hombre hombre niña niña|familia hombre hombre niña y niña	hija hijo madre padre mama papa
+        🈯	ideograma japones para reservado	kanji
+        🚠	teleferico de montaña	cable funicular vehiculo ski telecabina tren vagon gondola
+        🕟	cuatro y media	4 30 reloj tiempo hora treinta
+        👨‍👨‍👦‍👦	familia hombre hombre niño niño|familia hombre hombre niño y niño	hija hijo madre padre mama papa
+        👩‍👩‍👧‍👦	familia mujer mujer niña niño|familia mujer mujer niña y niño	hija hijo madre padre mama papa
+        🇷🇼	bandera ruanda
+        🇦🇽	bandera islas aland
+        👩‍👦‍👦	familia mujer niño niño|familia mujer niño y niño	hija hijo madre padre mama papa
+        🇫🇯	bandera fiyi
+        🥌	piedra de curling	juego roca curlin
+        🇦🇸	bandera samoa americana
+        🇹🇩	bandera chad
+        👨‍👧‍👦	familia hombre niña niño|familia hombre niña y niño	hija hijo madre padre mama papa
+        🇦🇩	bandera andorra
+        🇬🇲	bandera gambia
+        🇬🇦	bandera gabon
+        🗂️	separador de fichas|separadores para tarjetas|separadores	fichero archivos carpeta indice tarjeta
+        🇧🇲	bandera bermudas
+        👩‍🏭	profesional industrial mujer	fabrica montaje obrera operaria trabajadora
+        🕝	dos y media	2 30 reloj tarde tiempo hora treinta
+        🕦	once y media	11 30 reloj tiempo 1 hora treinta
+        🕢	siete y media	7 30 reloj tiempo hora treinta
+        🕜	una y media	1 30 reloj hora tiempo treinta
+        🇲🇳	bandera mongolia
+        🇹🇬	bandera togo
+        🕤	nueve y media	9 30 reloj tiempo hora treinta
+        🇲🇿	bandera mozambique
+        👨‍👨‍👦	familia hombre hombre niño|familia hombre hombre y niño	hija hijo madre padre mama papa
+        🈂️	ideograma japones para de cortesia|ideograma japones para cargo por servicio	katakana boton
+        🇬🇼	bandera guinea bisau
+        🇧🇳	bandera brunei
+        🇲🇻	bandera maldivas
+        🕧	doce y media	12 30 reloj tiempo hora treinta
+        🇲🇴	bandera rae de macao china
+        🕡	seis y media	6 30 reloj tiempo hora treinta
+        ⛎	ofiuco	horoscopo portador serpiente zodiaco vibora
+        🇹🇴	bandera tonga
+        🕣	ocho y media	8 30 reloj tiempo hora treinta
+        👨‍👨‍👧‍👦	familia hombre hombre niña niño|familia hombre hombre niña y niño	hija hijo madre padre mama papa
+        🇪🇷	bandera eritrea
+        🇦🇨	bandera isla de la ascension|bandera isla ascension
+        🇰🇬	bandera kirguistan
+        🇦🇶	bandera antartida
+        🇨🇻	bandera cabo verde
+        🇧🇫	bandera burkina faso
+        🇰🇵	bandera corea del norte
+        👨‍👦‍👦	familia hombre niño niño|familia hombre niño y niño	hija hijo madre padre mama papa
+        🕥	diez y media	10 30 reloj tiempo hora treinta
+        🇲🇩	bandera moldavia
+        🇮🇨	bandera canarias|bandera islas canarias
+        🇻🇦	bandera ciudad del vaticano
+        🇬🇩	bandera granada
+        🇮🇲	bandera isla de man
+        👩‍👩‍👦‍👦	familia mujer mujer niño niño|familia mujer mujer niño y niño	hija hijo madre padre mama papa
+        🇲🇫	bandera san martin
+        📇	organizador de fichas	cartera ficha tarjetas indice rolodex tarjetero
+        🈺	ideograma japones para abierto	kanji
+        🇱🇦	bandera laos
+        🛷	trineo	nieve
+        🕞	tres y media	3 30 reloj tiempo hora treinta
+        🇲🇼	bandera malaui
+        👩‍👩‍👦	familia mujer mujer niño|familia mujer mujer y niño	hija hijo madre padre mama papa
+        👨‍👨‍👧	familia hombre hombre niña|familia hombre hombre y niña	hija hijo madre padre mama papa
+        🈷️	ideograma japones para cantidad mensual|cantidad mensual en japones|ideograma japones de cantidad mensual	kanji boton
+        👨‍👧‍👧	familia hombre niña niña|familia hombre niña y niña	hija hijo madre padre mama papa
+        🇺🇳	bandera naciones unidas
+        🗃️	archivador de tarjetas|organizador de tarjetas|organizador de archivos	archivo caja fichero
+        🇱🇸	bandera lesoto
+        🗜️	tornillo de banco|abrazadera	herramienta torniquete
+        🇬🇺	bandera guam
+        🇧🇻	bandera isla bouvet
+        🔡	letras latinas minusculas	abcd abecesario alfabeto entrada latin
+        🇫🇴	bandera islas feroe
+        🇲🇺	bandera mauricio
+        🇵🇬	bandera papua nueva guinea
+        🇨🇼	bandera curazao
+        🇬🇬	bandera guernesey|bandera guernsey
+        🈁	ideograma japones para aqui	katakana ココ
+        🔣	simbolos	entrada
+        🇼🇸	bandera samoa
+        🇸🇷	bandera surinam
+        🇹🇲	bandera turkmenistan
+        🇸🇸	bandera sudan del sur
+        🗄️	archivador|archivero	archivos oficina organizador archivo carpetas
+        🇧🇹	bandera butan
+        🇸🇽	bandera sint maarten
+        🇰🇲	bandera comoras
+        🈸	ideograma japones para aplicacion	kanji
+        🇩🇲	bandera dominica
+        🇪🇭	bandera sahara occidental
+        🇧🇿	bandera belice
+        🇻🇮	bandera islas virgenes de ee uu
+        🇬🇫	bandera guayana francesa
+        🇸🇲	bandera san marino
+        🇩🇯	bandera yibuti
+        🇹🇨	bandera islas turcas y caicos
+        🇱🇨	bandera santa lucia
+        🇻🇺	bandera vanuatu
+        🇵🇫	bandera polinesia francesa
+        🇬🇮	bandera gibraltar
+        🇸🇨	bandera seychelles
+        🇰🇳	bandera san cristobal y nieves
+        🇯🇪	bandera jersey
+        🇲🇶	bandera martinica
+        👨‍👩‍👦	familia hombre mujer niño|familia hombre mujer y niño	hija hijo madre padre mama papa
+        🇷🇪	bandera reunion
+        🇸🇿	bandera esuatini|bandera eswatini
+        🇰🇾	bandera islas caiman
+        ⏏️	expulsar|boton expulsar	musica
+        🇻🇨	bandera san vicente y las granadinas
+        🇻🇬	bandera islas virgenes britanicas
+        🇱🇮	bandera liechtenstein
+        🇨🇨	bandera islas cocos
+        🇨🇫	bandera republica centroafricana
+        🇸🇹	bandera santo tome y principe
+        🇬🇱	bandera groenlandia
+        🇵🇼	bandera palaos
+        🇬🇵	bandera guadalupe
+        🇭🇲	bandera islas heard y mcdonald
+        🇨🇰	bandera islas cook
+        🇫🇰	bandera islas malvinas
+        🇵🇳	bandera islas pitcairn
+        🇳🇫	bandera isla norfolk
+        🇸🇧	bandera islas salomon
+        🇹🇱	bandera timor leste|bandera timor oriental
+        🇫🇲	bandera micronesia
+        🇮🇴	bandera territorio britanico del oceano indico
+        🇲🇭	bandera islas marshall
+        🇬🇶	bandera guinea ecuatorial
+        🇹🇰	bandera tokelau
+        🇧🇶	bandera caribe neerlandes
+        🇲🇵	bandera islas marianas del norte
+        🇨🇽	bandera isla de navidad
+        🇰🇮	bandera kiribati
+        🇳🇺	bandera niue
+        🇸🇯	bandera svalbard y jan mayen
+        🇲🇸	bandera montserrat
+        🇸🇭	bandera santa elena
+        🇹🇻	bandera tuvalu
+        🇳🇨	bandera nueva caledonia
+        🇳🇷	bandera nauru
+        🇧🇱	bandera san bartolome
+        🇼🇫	bandera wallis y futuna
+        🇬🇸	bandera islas georgia del sur y sandwich del sur
+        🫠	cara derritiendose|cara que se derrite	calor derretido derretirse desaparecer fundirse liquido avergonzada emoticones emociones sarcasmo sarcastico sonrisa verguenza derretir disolverse
+        🫫	cara agrietada	grieta rota romperse estres agobio
+        🥰	cara sonriendo con corazones	adorar amor enamorada enamorado feliz 3 me encanta romance sonrisa amo adoracion enamoramiento flechazo carita corazon adoro
+        🥲	cara sonriente con lagrima	agradecido aliviado emocionado orgulloso sonrisa emocionante feliz
+        🫢	cara con ojos abiertos y boca tapada	alucinar asombro increible sorpresa verguenza callate mano sobre discreto no puedo creer omg secreto shock
+        🫣	cara tapada con ojo espiando	espiar fascinado mirar vistazo escondida sonrojada emoticones emociones temor verguenza
+        🫡	cara saludando	ejercito orden saludo si sol vale buena suerte emoticones emociones ok respeto señor señora soleado tropas
+        🫥	cara con linea de puntos	depresivo deprimido desaparecer esconderse introvertido invisible escondida como sea depresion emoticones emociones expresion
+        😶‍🌫️	cara entre las nubes	ausente cabeza niebla
+        😮‍💨	cara exhalando	alivio bocanada exhalar jadear resoplido silbar agotado respirar silbido soplar toser
+        🫨	cara temblorosa|cara que vibra	shock temblar terremoto vibrar aturdimiento locura mareo panico sorpresa temblando
+        🙂‍↔️	cabeza negando|cabeza en movimiento horizontal|cabeza moviendose horizontalmente|cara moviendose horizontalmente	negar no diciendo
+        🙂‍↕️	cabeza asintiendo|cabeza moviendose verticalmente|cara moviendose verticalmente	asentir si afirmando diciendo
+        🫩	cara con ojeras	agotado agotamiento cansado cansancio extenuacion extenuado ojos sueño cansada dormi mal falta no bolsas bajo somnoliento exhausto
+        🥵	cara con calor|cara de calor	roja fiebre golpe sudor apuros bochorno febril jadeando sofoco sudando colorada
+        🥶	cara con frio|cara de frio	congelada congelado helado bajo cero congelacion congelarse helada nieve tengo azul congelamiento tempano
+        🥴	cara de grogui|cara de mareo	atontado entonado intoxicado mareado abuso sustancias alcohol borracha borracho drogas ebriedad pasada tragos pasado tomada boca ondulada borrachera intoxicacion ojos desparejos desbalanceados
+        😵‍💫	cara con ojos en espiral	hipnotizado indispuesto mareado mareo problema alucinado confundido desmayado locura
+        🥳	cara de fiesta	capirote celebracion gorro matasuegras alegria bonete celebrar emocion viva yupi
+        🥸	cara disfrazada	careta disfraz disimulo gafas incognito nariz anteojos bigote espia lentes
+        🫤	cara con boca diagonal	decepcion decepcionado esceptico inseguro jo vaya confundida como sea confusion emoticones emociones duda frustracion no entiendo expresion
+        🫪	cara deformada|cara de susto	ansiedad conmocionado hinchado panico sorprendido vulnerable shock sorpresa vulnerabilidad
+        🥺	cara suplicante|cara de suplica	implorar ojos adorables piedad favor ruego cachorro grandes llorosos rogar triste no porfa porfis
+        🥹	cara aguantandose las lagrimas	emocion emocionado llorar orgulloso resistir triste agradecimiento emocionada emoticones emociones alegria orgullo sentimientos ternura tristeza verguenza
+        🥱	cara de bostezo|cara bostezando	aburrido cansado dormido sueño dormir bostezar buenas noches siesta zzz cansada
+        ❤️‍🔥	corazon en llamas	amor fuego lujuria pasion
+        ❤️‍🩹	corazon vendado	bien curarse mejor mejorar recuperacion salud
+        🩷	corazon rosa	amor bonito gustar adorable dulce emocion especial ternura tierno
+        🩵	corazon azul claro|corazon celeste	cian amor azulado cielo emocion especial ternura
+        🤎	corazon marron|corazon cafe	emocion
+        🩶	corazon gris	pizarra plata amor emocion especial metalizado plateado
+        🤍	corazon blanco	emocion
+        🫯	nube de pelea	alboroto altercado bronca desacuerdo discusion lucha debate forcejeo gresca trifulca
+        🫱	mano hacia la derecha	apreton manos dar sacudir sacudon sostener
+        🫲	mano hacia la izquierda	apreton manos dar sacudir sacudon sostener
+        🫳	mano con la palma hacia abajo	bajar descartar fuera no quita rechazar dejar caer levantar tirar espantar quitar
+        🫴	mano con la palma hacia arriba	acercate dame ofrecer trae ven
+        🫷	mano empujando hacia la izquierda	choca esos cinco detener empujar rechazar stop parar
+        🫸	mano empujando hacia la derecha	choca esos cinco detener empujar rechazar stop parar
+        🤌	dedos juntos apuntando hacia arriba|dedos unidos	gesto italia italiano mano sarcasmo como ocurre
+        🤏	mano pellizcando	pellizco poco poquito chico chiquito dedos pequeño pizca
+        🫰	mano con dedo indice y pulgar cruzados	amor caro chasquido corazon dinero gasto personas cuerpos tronar dedos
+        🫵	dedo indice apuntandote a ti	apuntar dirigir mano personas cuerpos pinchar señalar
+        🫹	pulgar hacia la izquierda	mano señalar direccion
+        🫺	pulgar hacia la derecha	mano señalar direccion
+        🫶	manos formando un corazon|corazon con las manos	amor amo
+        🦾	brazo mecanico	accesibilidad ortopedia protesis
+        🦿	pierna mecanica	accesibilidad ortopedia protesis
+        🦵	pierna	extremidad patada pie doblada flexionada rodilla
+        🦶	pie	patada pisoton pies pisada pisado pisar pison tobillo
+        🦻	oreja con audifono|oreja con protesis auditiva	accesibilidad sordo aparato auditivo sordera auricular
+        🫀	corazon humano|organo cardiaco	anatomia cardiologia latido pulso anatomico real latir centro
+        🫁	pulmones	exhalar inhalar organo respiracion respirar aliento cuerpo humano exhalacion inhalacion
+        🦷	diente	dentista molar muela dentadura dientes muelas odontologo perlas
+        🦴	hueso	esqueleto suerte huesos perro
+        🫦	labio mordido|mordiendo el labio	ansioso incomodo ligar miedo nervioso preocupado ansiedad beso coqueteo lapiz labial morder nervios personas cuerpos preocupacion sexi coqueteria incomodidad nerviosismo coquetear
+        🧔‍♂️	hombre barba
+        🧔‍♀️	mujer barba
+        👨‍🦰	hombre pelo pelirrojo|hombre pelirrojo	adulto amigo cara chico muchacho novio persona señor
+        👨‍🦱	hombre pelo rizado	adulto amigo cara chico muchacho novio persona señor
+        👨‍🦳	hombre pelo blanco|hombre pelo canoso	adulto amigo cara chico muchacho novio persona señor
+        👨‍🦲	hombre sin pelo|hombre calvo	adulto amigo cara chico muchacho novio persona señor
+        👩‍🦰	mujer pelo pelirrojo|mujer pelirrojo	adulta cara chica persona señora
+        🧑‍🦰	persona adulta pelo pelirrojo|persona pelo pelirrojo|persona adulta pelirrojo	genero neutro no especificado
+        👩‍🦱	mujer pelo rizado	adulta cara chica persona señora
+        🧑‍🦱	persona adulta pelo rizado|persona pelo rizado	genero neutro no especificado
+        👩‍🦳	mujer pelo blanco|mujer pelo canoso	adulta cara chica persona señora
+        🧑‍🦳	persona adulta pelo blanco|persona pelo blanco|persona adulta pelo canoso	genero neutro no especificado
+        👩‍🦲	mujer sin pelo|mujer calvo	adulta cara chica persona señora
+        🧑‍🦲	persona adulta sin pelo|persona sin pelo|persona adulta calvo	genero neutro no especificado
+        👱‍♀️	mujer rubia	rubiales cabello rubio pelo cara guera
+        👱‍♂️	hombre rubio	rubiales cabello pelo cara guero
+        🙍‍♂️	hombre frunciendo el ceño	fruncido gesto
+        🙍‍♀️	mujer frunciendo el ceño	fruncido gesto frunce seño persona triste cara
+        🙎‍♂️	hombre haciendo pucheros|hombre enojado	gesto decepcionado disgustado enfadado puchero molesto
+        🙎‍♀️	mujer haciendo pucheros|mujer enojada	gesto decepcionada disgustada enfadada molesta puchero
+        🙅‍♂️	hombre haciendo el gesto de no	mano prohibido brazos cruzados esta mal diciendo ni pienses acerques
+        🙅‍♀️	mujer haciendo el gesto de no	mano prohibido brazos cruzados esta mal diciendo ni pienses acerques
+        🙆‍♂️	hombre haciendo el gesto de de acuerdo|hombre haciendo el gesto de ok	mano vale bien esta levantando brazos sobre cabeza omg
+        🙆‍♀️	mujer haciendo el gesto de de acuerdo|mujer haciendo el gesto de ok	mano vale bien esta levantando brazos sobre cabeza omg
+        💁‍♂️	empleado de mostrador de informacion	hombre mano ayuda centro serio inclinada insolente obvio personas sarcasmo mesa
+        💁‍♀️	empleada de mostrador de informacion	mano mujer mesa
+        🙋‍♂️	hombre con la mano levantada|hombre levantando la mano	gesto levantar feliz hola yo puedo
+        🙋‍♀️	mujer con la mano levantada|mujer levantando la mano	gesto levantar feliz hola yo puedo
+        🧏	persona sorda	accesibilidad escuchar oido oir sordera lenguaje señas
+        🧏‍♂️	hombre sordo	sordera accesibilidad escuchar lenguaje señas oido oir
+        🧏‍♀️	mujer sorda	sordera accesibilidad escuchar lenguaje señas oido oir
+        🙇‍♂️	hombre haciendo una reverencia	disculpa gesto perdon arrepentimiento siento perdoname rogar
+        🙇‍♀️	mujer haciendo una reverencia	disculpa gesto perdon arrepentimiento siento perdoname rogar
+        🤦‍♂️	hombre con la mano en la frente	facepalm incredulidad cara no puedo creer otra vez puede ser omg exasperacion palma
+        🤦‍♀️	mujer con la mano en la frente	facepalm incredulidad cara no puedo creer puede ser omg exasperacion palma
+        🤷‍♂️	hombre encogido de hombros	duda encogerse indiferencia
+        🤷‍♀️	mujer encogida de hombros	duda encogerse indiferencia
+        🧑‍⚕️	profesional sanitario	doctor enfermero medico salud terapeuta
+        🧑‍🎓	estudiante	graduado licenciado universitario
+        🧑‍🏫	docente|maestro	educador enseñanza instructor profesor
+        🧑‍⚖️	fiscal|juez	juicio magistrado
+        🧑‍🌾	profesional de la agricultura|granjero	agricultor cultivador jardinero labrador cultivo granja
+        🧑‍🍳	chef|cocinero	cocinillas guisandero pinche cocina
+        🧑‍🔧	profesional de la mecanica	electricista fontanero mecanico operario tecnico electricidad plomeria
+        🧑‍🏭	profesional industrial|obrero de fabrica	montaje operario trabajador
+        🧑‍💼	oficinista|profesional	arquitecto director ejecutivo empresa
+        🧑‍🔬	profesional de la ciencia	biologo cientifico fisico investigador quimico biologia fisica quimica
+        🧑‍💻	profesional de la tecnologia	desarrollador informatico programador software tecnologo desarrollo tecnologico informatica programcion
+        🧑‍🎤	cantante	artista estrella rock
+        🧑‍🎨	artista	paleta pintor pinturas
+        🧑‍✈️	piloto	avion capitan vuelo
+        🧑‍🚀	astronauta	cohete espacio
+        🧑‍🚒	bombero	camion manguera
+        👮‍♂️	agente de policia hombre	poli oficial
+        👮‍♀️	agente de policia mujer	poli oficial
+        🕵️‍♂️	detective hombre	agente espia investigador
+        🕵️‍♀️	detective mujer	agente espia investigadora
+        💂‍♂️	guardia hombre	vigilante real britanica sombrero
+        💂‍♀️	guardia mujer	vigilante londres palacio buckingham sombrero real britanica
+        🥷	ninja	furtivo guerrero luchador oculto sigilo habil secreto silencioso soldado
+        👷‍♂️	profesional de la construccion hombre|obrero de construccion	albañil trabajador
+        👷‍♀️	profesional de la construccion mujer|obrera de construccion	albañila trabajadora
+        🫅	persona con corona	majestad monarca monarquia noble real realeza nobleza
+        👳‍♂️	hombre con turbante
+        👳‍♀️	mujer con turbante
+        🤵‍♂️	hombre con esmoquin
+        🤵‍♀️	mujer con esmoquin
+        👰‍♂️	hombre con velo	boda novio
+        👰‍♀️	mujer con velo	boda novia
+        🫃	hombre embarazado	barriga hinchado hinchazon inflado lleno estomago
+        🫄	persona embarazada	barriga embarazo gestacion hinchazon estomago hinchado lleno
+        👩‍🍼	mujer alimentando a bebe	alimentar amamantar lactancia
+        👨‍🍼	hombre alimentando a bebe	alimentar amamantar lactancia
+        🧑‍🍼	persona alimentando a bebe	alimentar amamantar lactancia
+        🧑‍🎄	noel|papa noel	celebracion claus cuento fantasia feliz fiestas navidad santa gorro
+        🦸	personaje de superheroe|superheroina	bien heroe heroina superpoder
+        🦸‍♂️	superheroe	bueno heroe hombre superhombre superpoder bien
+        🦸‍♀️	superheroina|mujer superheroina	bondad heroe heroina superheroe superpoder bien
+        🦹	personaje de supervillano|supervillano	mal superpoder supervillana villana villano delito
+        🦹‍♂️	supervillano|hombre supervillano	mal malvado villano delito superpoder
+        🦹‍♀️	supervillana	mal malvada mujer villana delito superpoder
+        🧙‍♂️	mago	brujo hechicero
+        🧙‍♀️	maga	bruja hechicera
+        🧚‍♂️	hada hombre	oberon puck
+        🧚‍♀️	hada mujer	campanilla titania
+        🧛‍♂️	vampiro hombre	dracula muerto viviente no
+        🧛‍♀️	vampiresa	muerta viviente no
+        🧜‍♂️	sirena hombre|sireno	triton
+        🧜‍♀️	sirena	mujer
+        🧝‍♂️	elfo hombre	magico
+        🧝‍♀️	elfa	magico mujer
+        🧞‍♂️	genio hombre	djinn lampara
+        🧞‍♀️	genio mujer	lampara
+        🧟‍♂️	zombi hombre	caminante muerto viviente no
+        🧟‍♀️	zombi mujer	caminante muerta viviente no hombre
+        🧌	trol	cuento hadas fantasia monstruo gigante verde
+        🫈	criatura peluda	bigfoot bosque criptido gigante monstruo peludo sasquatch yeti hombre nieves pie grande
+        💆‍♂️	hombre recibiendo masaje	cara facial salon alivio belleza dolor cabeza relajacion relax spa
+        💆‍♀️	mujer recibiendo masaje	cara facial salon alivio belleza dolor cabeza relajacion relax spa
+        💇‍♂️	hombre cortandose el pelo	belleza corte peluquero barbero barbershop cabello estilista peluqueria salon
+        💇‍♀️	mujer cortandose el pelo	belleza corte peluquero peluqueria
+        🚶‍♂️	hombre caminando	andar caminata marcha
+        🚶‍♀️	mujer caminando	andar caminata marcha caminar peaton
+        🚶‍➡️	persona caminando hacia la derecha	andar caminar caminata deambular pasear paseo peaton
+        🚶‍♀️‍➡️	mujer caminando hacia la derecha	andar caminata marcha caminar peaton
+        🚶‍♂️‍➡️	hombre caminando hacia la derecha	andar caminata marcha
+        🧍	persona de pie	levantada levantado levantarse parada parado pararse
+        🧍‍♂️	hombre de pie	levantado levantarse
+        🧍‍♀️	mujer de pie	levantada levantarse
+        🧎	persona de rodillas	arrodillada arrodillado arrodillarse rodilla
+        🧎‍♂️	hombre de rodillas	arrodillado arrodillarse
+        🧎‍♀️	mujer de rodillas	arrodillada arrodillarse
+        🧎‍➡️	persona de rodillas hacia la derecha	arrodillada arrodillado arrodillarse rodilla
+        🧎‍♀️‍➡️	mujer de rodillas hacia la derecha	arrodillada arrodillarse
+        🧎‍♂️‍➡️	hombre de rodillas hacia la derecha	arrodillado arrodillarse
+        🧑‍🦯	persona con baston|persona con baston blanco	accesibilidad ciego invidente
+        🧑‍🦯‍➡️	persona con baston hacia la derecha|persona con baston blanco hacia la derecha	accesibilidad ciego invidente
+        👨‍🦯	hombre con baston|hombre con baston blanco	accesibilidad ciego invidente
+        👨‍🦯‍➡️	hombre con baston hacia la derecha|hombre con baston blanco hacia la derecha	accesibilidad ciego invidente
+        👩‍🦯	mujer con baston|mujer con baston blanco	accesibilidad ciega invidente discapacidad visual
+        👩‍🦯‍➡️	mujer con baston hacia la derecha|mujer con baston blanco hacia la derecha	accesibilidad ciega invidente discapacidad visual
+        🧑‍🦼	persona en silla de ruedas electrica	accesibilidad
+        🧑‍🦼‍➡️	persona en silla de ruedas electrica hacia la derecha	accesibilidad
+        👨‍🦼	hombre en silla de ruedas electrica	accesibilidad
+        👨‍🦼‍➡️	hombre en silla de ruedas electrica hacia la derecha	accesibilidad
+        👩‍🦼	mujer en silla de ruedas electrica	accesibilidad
+        👩‍🦼‍➡️	mujer en silla de ruedas electrica hacia la derecha	accesibilidad
+        🧑‍🦽	persona en silla de ruedas manual	accesibilidad
+        🧑‍🦽‍➡️	persona en silla de ruedas manual hacia la derecha	accesibilidad
+        👨‍🦽	hombre en silla de ruedas manual	accesibilidad
+        👨‍🦽‍➡️	hombre en silla de ruedas manual hacia la derecha	accesibilidad
+        👩‍🦽	mujer en silla de ruedas manual	accesibilidad
+        👩‍🦽‍➡️	mujer en silla de ruedas manual hacia la derecha	accesibilidad
+        🏃‍♂️	hombre corriendo	carrera correr maraton
+        🏃‍♀️	mujer corriendo	carrera correr maraton apuro corredor rapido velocidad veloz
+        🏃‍➡️	persona corriendo hacia la derecha	carrera deporte maraton corredor correr deportista hombre maratonista voy
+        🏃‍♀️‍➡️	mujer corriendo hacia la derecha	carrera correr maraton apuro corredor rapido velocidad veloz
+        🏃‍♂️‍➡️	hombre corriendo hacia la derecha	carrera correr maraton
+        🧑‍🩰	bailarina de ballet	bailarin
+        👯‍♂️	hombres con orejas de conejo|hombres bailando con orejas de conejo	bailar fiesta hombre bailarines
+        👯‍♀️	mujeres con orejas de conejo|mujeres bailando con orejas de conejo	bailar fiesta mujer bailarinas
+        🧖‍♂️	hombre en una sauna|hombre en sauna	vapor
+        🧖‍♀️	mujer en una sauna|mujer en sauna	vapor
+        🧗‍♂️	hombre escalando	alpinista escalador
+        🧗‍♀️	mujer escalando	alpinista escaladora
+        🏌️‍♂️	hombre jugando al golf	jugador
+        🏌️‍♀️	mujer jugando al golf	jugadora
+        🏄‍♂️	hombre haciendo surf	surfero surfista
+        🏄‍♀️	mujer haciendo surf	surfera surfista
+        🚣‍♂️	hombre remando en un bote|hombre remando	barca remo canoa deporte pescar remar remos
+        🚣‍♀️	mujer remando en un bote|mujer remando	barca remo canoa deporte pescar remar remos
+        🏊‍♂️	hombre nadando	nadar natacion
+        🏊‍♀️	mujer nadando	nadar natacion
+        ⛹️‍♂️	hombre botando un balon	botar pelota baloncesto basketball basquet basquetbolista deporte jugando jugador
+        ⛹️‍♀️	mujer botando un balon	botar pelota baloncesto basketball basquet basquetbolista deporte jugador jugando
+        🏋️‍♂️	hombre levantando pesas	halterofilia levantador gimnasio gym hacer levantadora levantar
+        🏋️‍♀️	mujer levantando pesas	halterofilia levantadora gimnasio gym hacer levantar
+        🚴‍♂️	hombre en bicicleta	ciclismo ciclista andar deporte deportes montar pasear
+        🚴‍♀️	mujer en bicicleta	ciclismo ciclista andar deporte deportes montar pasear
+        🚵‍♂️	hombre en bicicleta de montaña	ciclista mountain bike bici ciclismo deporte montando
+        🚵‍♀️	mujer en bicicleta de montaña	ciclista mountain bike bici ciclismo deporte montando
+        🤸‍♂️	hombre dando una voltereta lateral|hombre haciendo una vuelta de carro	deporte gimnasia rueda acrobacia emocion feliz gimnasta pirueta
+        🤸‍♀️	mujer dando una voltereta lateral|mujer haciendo una vuelta de carro	deporte gimnasia rueda acrobacia emocion feliz gimnasta pirueta
+        🤼‍♂️	hombres luchando	deporte hombre lucha luchador combate libre luchar pelea torneo
+        🤼‍♀️	mujeres luchando	deporte lucha luchadora mujer combate libre luchar pelea torneo
+        🤽‍♂️	hombre jugando al waterpolo	agua deporte waterpolista deportes persona polo acuatico water
+        🤽‍♀️	mujer jugando al waterpolo	agua deporte waterpolista nadar persona polo acuatico water
+        🤾‍♂️	hombre jugando al balonmano|hombre jugando handball	balonmanista deporte handboll mano pelota
+        🤾‍♀️	mujer jugando al balonmano|mujer jugando handball	balonmanista deporte atletica balon lanzamiento pelota persona tiro mano handboll
+        🤹‍♂️	hombre haciendo malabares	malabarismo malabarista acto circo equilibrio
+        🤹‍♀️	mujer haciendo malabares	malabarismo malabarista acto circo equilibrio hombre
+        🧘‍♂️	hombre en posicion de loto	meditacion yoga
+        🧘‍♀️	mujer en posicion de loto	meditacion yoga
+        🧑‍🤝‍🧑	dos personas de la mano|personas que se toman de la mano	pareja persona dandose tomar tomadas tomados
+        🫂	personas abrazandose	abrazo adios despedida gracias saludo abrazarse amistad amor reencuentro
+        🧑‍🧑‍🧒	familia adulto adulto niño|familia adulto adulto infante
+        🧑‍🧑‍🧒‍🧒	familia adulto adulto niño niño|familia adulto adulto infante infante
+        🧑‍🧒	familia adulto niño|familia adulto infante
+        🧑‍🧒‍🧒	familia adulto niño niño|familia adulto infante infante
+        🫆	huella dactilar|huella digital	delito detective forense identidad misterio rastro seguridad
+        🦧	orangutan	mono primate simio animal
+        🦮	perro guia	accesibilidad ciego invidente lazarillo animal discapacidad visual
+        🐕‍🦺	perro de servicio	accesibilidad apoyo asistencia animal lazarillo
+        🦝	mapache	astuto curioso ladino maquillaje ojeras animal astuta curiosa astucia curiosidad
+        🐈‍⬛	gato negro	mala suerte animal felino gatito halloween miau supersticion
+        🫎	alce	animal asta ciervo canadiense cuernos mamifero uapiti
+        🫏	burro	animal asno borrico mamifero mula terco
+        🦬	bisonte	bufalo cibolo animal manadaa
+        🦙	llama	alpaca guanaco lana vicuña camelido
+        🦣	mamut	colmillo extinguido lanudo animal
+        🦛	hipopotamo	paquidermo animal zoologico
+        🦫	castor	roedor animal dientes presa
+        🐻‍❄️	oso polar	artico blanco
+        🦥	perezoso	gandul lento vago holgazan pereza
+        🦦	nutria	bromista jugueton pesca animal
+        🦨	mofeta|zorrillo	apestar hedor mal olor peste tufo animal zorrino
+        🦘	canguro	marsupial saltar salto animal australia brincar saltarin
+        🦡	tejon	ratel miel melero
+        🦢	cisne	ave patito feo animal ballet
+        🦤	dodo	ave dronte extinguido mauricio pajaro animal pico isla
+        🪶	pluma	ave ligero pajaro plumaje
+        🦩	flamenco	extravangante ostentoso tropical animal ave pajaro extravagante flamingo
+        🦚	pavo real	ave orgulloso plumas animal bello colorida colorido linda lindo pajaro majestuoso ostentoso vanidoso orgullo ostentacion
+        🦜	loro	ave hablar papagayo pirata animal cotorra guacamaya pajaro cotorro perico
+        🪽	ala	angel angelical ave mitologia pajaro volar ascender aviacion celestial
+        🐦‍⬛	pajaro negro|ave negra|mirlo	cuervo grajo animal graja pico zanate corneja
+        🪿	oca|ganso	ave graznar pajaro animal manada pato rebaño tonto
+        🐦‍🔥	fenix	ave fuego fantasia reencarnacion renacer llamas emerger reinventarse renacimiento renovacion revivir transformarse regeneracion
+        🫍	orca	ballena mar marino oceano mamifero
+        🦭	foca	leon marino animal fauna lobo mar oceano
+        🪸	coral	arrecife oceano animales naturaleza cambio climatico mar planta
+        🪼	medusa	invertebrado marino picadura picar acuario jalea mar oceano plancton tentaculos
+        🦞	bogavante|langosta	marisco pinzas animal crustaceo mar mariscos playa tenazas bisque
+        🦪	ostra|ostion	buceo perla almeja concha
+        🫌	mariposa monarca	insecto naranja migracion
+        🪲	escarabajo	bicho insecto animal coleoptero verde
+        🪳	cucaracha	alimaña bicho insecto plaga animal
+        🦟	mosquito	fiebre insecto malaria virus animal enfermedad picada zancudo
+        🪰	mosca	basura bicho mal olor podrido animal insecto plaga volar
+        🪱	gusano	lombriz oruga parasito animal invertebrado tierra
+        🦠	microbio	ameba bacteria germen virus ciencias microorganismo amiba
+        🪷	loto|flor de loto	budismo hinduismo pureza animales naturaleza calma lotus paz serenidad tranquilidad
+        🪻	campanilla|jacinto	boca dragon flor lavanda lila lupino arbusto florecer indigo morado planta primavera violeta
+        🪴	planta de maceta|planta en una maceta|planta en maceta	crecer tiesto decoracion decorar fotosintesis verde casa nutriendo plantar servir
+        🪹	nido vacio	anidacion anidamiento anidar animales naturaleza hogar rama
+        🪺	nido con huevos	anidacion anidamiento anidar animales naturaleza ave pajaro rama
+        🪾	arbol sin hojas	deshojado esteril invierno madera muerto ramas sequia tronco secas yermo arido
+        🍋‍🟩	lima	citrico fruta tropical acido coctel jugo limon margarita refrescante zumo
+        🥭	mango	fruta tropical comida arbol
+        🫐	arandanos|moras azules	arandano azul baya frutos bosque mirtilo comida fruta rojos mora
+        🫒	aceituna	aperitivo comida oliva aceite olivo snack
+        🫑	pimiento|pimiento morron	aji chile rojo verdura comida verde vegetal
+        🫝	pepinillo	pepino encurtido comida verdura
+        🥬	verdura de hoja verde|verdura de hoja	bok choy col kale lechuga pak choi china rizada ensalada vegetal repollo chino
+        🧄	ajo	condimento vampiro
+        🧅	cebolla	condimento llorar
+        🫘	alubias|frijoles	comida habichuela roja habichuelas judia judias legumbre porotos
+        🫚	raiz de jengibre	cerveza especia garganta hierba natural salud
+        🫛	vaina	edamame guisante judias legumbre soja verdura judia porotos vegetal
+        🍄‍🟫	champiñon marron|hongo marron|hongo portabello	comida naturaleza seta vegetal espora cafe hongos ingrediente trufa champiñones cremini
+        🫜	tuberculo comestible|tuberculo|vegetal de raiz|betabel	chirivia comida ensalada huerto nabo rabano remolacha vegetariano verdura cocina vegetariana vegetales jardin
+        🫓	pan sin levadura|pan plano	arepa naan pita tortilla aperitivo comida
+        🥯	bagel	bocadillo pan panaderia comida desayuno rosca untar pasteleria queso crema
+        🧇	gofre|waffle	comida desayuno plancha metal
+        🫔	tamal	mejicano mexicano wrap comida mexicana
+        🧆	falafel	albondiga garbanzo albondigas bolas comida
+        🫕	fondue	chocolate olla queso suizo cocinar comida fuego
+        🧈	mantequilla	lacteo comida margarina
+        🧂	sal	condimento salero sabor salada salado sazon
+        🥮	pastel de luna	festival otoño yuebing dulce postre
+        🧁	magdalena|pastelito	cupcake dulce reposteria chispas colores cubilete indulgencia panaderia pasteleria pastelillo postre madalena madgalena
+        🫖	tetera	bebida infusion comida desayuno hora juego merienda pava
+        🫗	liquido derramandose|liquido que se vierte	bebida derramar vacio vaso verter copa derramada
+        🧋	te de burbujas	boba bubble tea burbuja leche perla bebida comida taiwan
+        🧃	tetrabrik|bebida en caja	brick carton envase zumo jugo dulce popote tetrapak
+        🧉	mate	bebida infusion yerba
+        🧊	cubito de hielo|hielo	frio iceberg cubo
+        🫙	tarro|jarra	almacenar condimento frasco recipiente salsa vacio contenedor guardar
+        🧨	petardo	dinamita explosivo fuegos artificiales boom chispa explosion fuego juegos pirotecnicos luz pirotecnia
+        🧧	sobre rojo	buena suerte hongbao lai see regalo china dinero obsequio
+        🥎	pelota de softball|softbol	bola deporte deportes guante sofbol
+        🥏	disco volador|frisbee	frisbi plato ultimate
+        🥍	lacrosse	bola palo pelota raqueta deportes gol juego
+        🤿	mascara de buceo	bucear buzo esnorquel tubo deporte snorkeling
+        🪀	yoyo	dieta efecto fluctuar juguete
+        🪁	cometa|papalote	juguete planear viento volar vuela
+        🪄	varita magica	bruja hechicero magia mago prestidigitacion abracadabra hechicera maga truco
+        🧩	pieza de puzle|pieza de rompecabezas	conectar pista juego pasatiempo puzzle
+        🧸	osito de peluche|oso de peluche	juguete felpudo felpa relleno
+        🪅	piñata	caballito celebracion fiesta caramelos color diversion dulces festejo golosinas sorpresa
+        🪩	bola de espejos	bailar brillar disco discoteca fiesta actividades diversion espejo baile brillante
+        🪆	muñeca rusa|muñecas rusas	babushka mamushka matrioska rusia matrioshka recuerdo souvenir
+        ♟️	peon de ajedrez|peon ajedrez
+        🧵	hilo	aguja carrete coser costura bordar cuerda hilar tejer bobina cordel
+        🪡	aguja de coser	bordado hilar punto tejer costura hilo
+        🧶	ovillo|estambre	bola croche punto tejer bordar crochet ganchillo gato hilo pelota tejido
+        🪢	nudo	anudar atar enredar trenzar amarrar cuerda marinero ocho
+        🧭	brujula	compas magnetico navegacion orientacion direccion magnetismo punto cardinal rumbo
+        🛘	desprendimiento|alud	avalancha desastre montaña peligro rocas terremoto barro
+        🧱	ladrillo|ladrillos	arcilla cemento muro pared argamasa mortero mezcla
+        🪨	piedra	pedrusco peña peñasco roca duro solido
+        🪵	madera|tronco	hoguera leña madero palos bosque leño
+        🛖	cabaña|choza	casa yurta hogar refugio redonda
+        🛕	templo hindu	hinduismo
+        🛝	tobogan|resbaladilla	jugar parque atracciones deslizar diversion plaza viajes lugares
+        🛻	camioneta|camioneta pickup	ranchera auto automovil carro coche medio transporte pick up
+        🦽	silla de ruedas manual	accesibilidad personas discapacidad
+        🦼	silla de ruedas electrica	accesibilidad persona discapacidad
+        🛺	mototaxi	rickshaw tuk bicitaxi taxi vehiculo
+        🛹	monopatin|skateboard|patineta	tabla deporte juego patinar patinetero skate skater
+        🛼	patines|patin	4 ruedas cuatro cordones deporte sobre patinar quad rollers skating
+        🛞	rueda	circulo girar neumatico rodar auto carro llanta vehiculo viajes lugares
+        🛙	faro	luz mar costa puerto barco
+        🛟	salvavidas	flotador rescate seguridad socorrista boya inflable nadar salvar viajes lugares
+        🪂	paracaidas	ala delta paracaidismo paravela volar parapente
+        🧳	equipaje	maleta viajar empacar valija viaje
+        🪐	planeta con anillos	saturnino saturno
+        🪋	meteoro	meteorito asteroide espacio estrella fugaz
+        🥽	gafas de proteccion|goggles	nadar ocular soldar bucear lentes natacion protector ojos snorkel snorkeling visor
+        🥼	bata de laboratorio	cientifico doctor experimento medico
+        🦺	chaleco de seguridad	emergencia ropa
+        🥻	sari	prenda ropa vestido india
+        🩱	traje de baño de una pieza	bañador
+        🩲	ropa interior	bañador bragas braguitas calzoncillos slip panties traje baño calzoncillo pantaleta pieza
+        🩳	pantalones cortos|shorts	bañador bermudas calzoncillos ropa interior traje baño
+        🪭	abanico abierto	airear bailar calor feria flamenco aleteo aplauso coquetear refrescar refrigeracion timidez ventilador
+        🩴	chancla	dedo chancleta chinela sandalia calzado comodidad ojota verano zapato playa zori
+        🥾	bota de senderismo|botas de excursion	camping mochilero acampada campamento excursionismo acampar
+        🥿	bailarina|zapato de piso	calzado bailarinas ballet chatitas chinitas pantuflas toreritas plano zapatos comodos
+        🩰	zapatillas de ballet	bailar bale danza baile
+        🪮	peineta	afro peine pelo cabello cepillar recoger
+        🪖	casco militar	ejercito guerra guerrero soldado belico proteccion
+        🪊	trombon	instrumento jazz metal musica triste viento movimiento vara
+        🪗	acordeon	concertina bandoneon fuelle instrumento musical musica teclado viento
+        🪕	banjo	banyo cuerda instrumento musica
+        🪘	tamboril	conga ritmo tambor instrumento musical musica percursion sonido yembe
+        🪇	maracas	agitar brasil instrumento movimiento musica percusion baile cha coctelera fiesta matraca
+        🪈	flauta	flautin instrumento viento madera musica banda grabador orquesta pifano
+        🪉	arpa|harpa	amor cupido instrumento musica orquesta angelical cuerdas
+        🪫	bateria baja	carga electronico energia pila agotada cansada cansado cansancio objeto electronica
+        🧮	abaco	calculo contar matematicas calculadora calculos contador numerador tabla tablero
+        🪔	lampara de aceite	diya diyo
+        🪙	moneda	dinero metal oro plata tesoro dolar euro riqueza
+        🪎	cofre de tesoro|cofre del tesoro	botin dinero joyas objetos valor oro piedras preciosas plata premio riqueza gemas
+        🧾	recibo	contabilidad prueba teneduria libros testimonio contador contaduria cuenta escritura evidencia factura registro
+        🪌	goma de borrar	borrador escuela error
+        🪍	red con mango	cazamariposas pesca atrapar
+        🪓	hacha	cortar dividir hachuela madera talar leña
+        🪃	bumeran	boomerang rebotar australia indigena juego lanzar
+        🪚	sierra de carpinteria	carpintero herramienta talar cortar serrucho
+        🪛	destornillador	atornillador herramienta tornillo arreglar plano desarmador
+        🦯	baston|baston blanco	accesibilidad ceguera ciega ciego invidente discapacidad visual
+        ⛓️‍💥	cadena rota	esposas libertad romper rotura rompiendo
+        🪝	gancho|anzuelo	agarrar atrapar garfio pescar punto venta
+        🧰	caja de herramientas	armario herramienta mecanico cajon cofre
+        🧲	iman	atraccion herradura magnetico forma polos positivo negativo
+        🪜	escalera	escalar escalerilla escalon peldaño bajar subir
+        🪏	pala	agujero cavar enterrar excavar hoyo huerto nieve planta jardin palear plantar cuchara pica
+        🧪	tubo de ensayo	ciencia experimento laboratorio quimica quimico ciencias sustancia
+        🧫	placa de petri	bacterias biologia biologo cultivo laboratorio bacteria biologa microbio
+        🧬	adn	biologo evolucion gen genetica vida biologa genes
+        🩸	gota de sangre	donacion donar herida medicina roja menstruacion sangrar
+        🩹	tirita|curita	aposito herida primeros auxilios tira adhesiva
+        🩼	muleta	ayuda movilidad baston discapacidad lesion palo objeto pierna coja rengo
+        🩺	estetoscopio	corazon doctor fonendoscopio latido medicina medico
+        🩻	radiografia|rayos x	doctor doctora esqueleto huesos medico medicina
+        🛗	ascensor	accesibilidad elevador montacargas
+        🪞	espejo	especulo reflector reflejo marco mirarse reflejar
+        🪟	ventana	abertura apertura cristal marco transparente vista cuadrado
+        🪑	silla	asiento sentarse
+        🪠	desatascador|destapacaños	fontanero retrete servicio succion baño fontaneria herramienta
+        🪤	trampa de ratones|trampa para ratones|ratonera	cebo cepo engañar raton queso rata ratas
+        🪒	cuchilla de afeitar|navaja de afeitar	afeitado afilado barbero rastrillo rasurar
+        🧴	bote de crema|botella de locion	champu hidratante protector solar acondicionador bloqueador frasco humectante
+        🧷	imperdible|broche de seguridad	pañal punk rock alfiler gancho gacilla ganchito nodriza seguro
+        🧹	escoba	barrer bruja fregar limpiar
+        🧺	cesta|canasta	colada cosecha picnic agricultura cultivo lavar ropa campesino
+        🧻	rollo de papel	absorbente higienico baño confort sanitario toilette toallas
+        🪣	cubo|balde	barreño cuba cubeta
+        🧼	jabon	bañarse enjabonarse jabonera lavarse pastilla bañar baño ducha ducharse duchate espuma limpiar barra lavar
+        🫧	burbujas	bajo agua eructar jabon limpiar baño burbuja espuma flotar objeto perla limpio repetir
+        🪥	cepillo de dientes	dental higiene limpio servicio aseo cuidado oral baño
+        🧽	esponja	absorbente limpiar poroso empapado empapar escurrir lavar limpieza porosa absorber
+        🧯	extintor	apagar extinguir incendio extinguidor incendios fuego matafuegos
+        🪦	lapida	cementario estela sepulcro tumba cementerio dep esquela muerte qepd rip
+        🧿	ojo turco|nazar	amuleto mal talisman azul cuenta piedra hechizo
+        🪬	hamsa	amuleto fatima jamsa mano maria miriam actividades fortuna azul ojo palma proteccion
+        🪧	letrero|cartel	anuncio aviso pancarta poste atencion
+        🪪	carne de identidad|identificacion|tarjeta de identificacion	conducir credenciales permiso seguridad credencial documento id licencia objeto
+        🪯	khanda	religion sij sijismo sikh deg fateh fe khalsa tegh
+        🛜	wifi	conexion inalambrica internet red wi fi computadora conectividad enrutador inalambrico telefono inteligente wlan
+        ♀️	signo femenino	mujer simbolo
+        ♂️	signo masculino	hombre simbolo
+        ⚧️	simbolo de transgenero
+        🟰	signo igual grueso|signo igual|signo igual resaltado	equivalencia igualdad matematicas mates iguales respuesta resultado simbolo
+        ♾️	infinito	ilimitado siempre universal eterno
+        ©️	copyright|simbolo de derechos de autor	signo
+        ®️	marca registrada|simbolo de marca registrada	signo
+        ™️	simbolo de marca comercial|marca comercial|marca registrada	signo trademark
+        🫟	salpicadura	gotear liquido mancha manchar pintura salpicar tinta derrame goteo holi krishna lio
+        🟠	circulo naranja	anaranjado
+        🟡	circulo amarillo
+        🟢	circulo verde	luz
+        🟣	circulo morado	lila purpura
+        🟤	circulo marron|circulo cafe
+        🟥	cuadrado rojo	cuadro
+        🟧	cuadrado naranja	anaranjado cuadro
+        🟨	cuadrado amarillo	cuadro
+        🟩	cuadrado verde	cuadro
+        🟦	cuadrado azul	cuadro
+        🟪	cuadrado morado	lila purpura cuadro
+        🟫	cuadrado marron|cuadrado cafe	cuadro
+        🏳️‍⚧️	bandera transgenero	azul blanco lgtb rosa celeste
+        🏴‍☠️	bandera pirata	botin jolly roger tesoro calavera
+        🇨🇶	bandera sark
+        🇩🇬	bandera diego garcia
+        🇵🇲	bandera san pedro y miquelon
+        🇹🇦	bandera tristan de acuña
+        🇹🇫	bandera territorios australes franceses
+        🇾🇹	bandera mayotte
+        """#
+
     static let toneVariants: [String: [String]] = grouped(singleToneRaw, size: 5)
     static let pairToneVariants: [String: [String]] = grouped(pairToneRaw, size: 25)
 

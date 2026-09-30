@@ -326,3 +326,64 @@ final class KeyboardThemeTests: XCTestCase {
         }
     }
 }
+
+// MARK: - Búsqueda de emojis
+
+final class EmojiSearchTests: XCTestCase {
+
+    private let index = EmojiSearchIndex(data: """
+        😺\tgato sonriendo\tcara sonrisa
+        🐱\tcara de gato\tanimal mascota
+        🐈\tgato\tanimal mascota
+        ❤️\tcorazon rojo\tamor emocion
+        😍\tcara sonriendo con ojos de corazon\tamor sonrisa
+        ☀️\tsol\tbrillante rayos soleado
+        🧴\tbote de crema\tprotector solar
+        🎂\ttarta de cumpleanos|pastel de cumpleanos\tcelebracion dulce
+        🌷\ttulipan\tflor planta
+        """)
+
+    func testPrimeroElQueSeLlamaAsi() {
+        XCTAssertEqual(index.search("gato"), ["🐈", "😺", "🐱"])
+    }
+
+    func testSinTildesNiMayusculas() {
+        XCTAssertEqual(index.search("CORAZÓN").first, "❤️")
+    }
+
+    func testPalabrasAMedioEscribir() {
+        XCTAssertEqual(Set(index.search("gat")), ["😺", "🐱", "🐈"])
+        XCTAssertEqual(index.search("corazon roj"), ["❤️"])
+    }
+
+    func testLasPalabrasVaciasNoHacenFalta() {
+        XCTAssertEqual(index.search("cara de gato").first, "🐱")
+        XCTAssertEqual(index.search("cara gato"), ["🐱", "😺"])
+    }
+
+    func testLaPalabraExactaVaAntesQueLaQueEmpiezaIgual() {
+        XCTAssertEqual(index.search("sol"), ["☀️", "🧴"])
+    }
+
+    func testPluralesYVariantesDelEspanol() {
+        XCTAssertEqual(index.search("flores"), ["🌷"])
+        XCTAssertEqual(index.search("gatos").first, "🐈")
+        XCTAssertEqual(index.search("pastel"), ["🎂"])
+    }
+
+    func testSinResultadosYConsultaVacia() {
+        XCTAssertTrue(index.search("xyz").isEmpty)
+        XCTAssertTrue(index.search("   ").isEmpty)
+    }
+
+    func testLaEñeEsOtraLetra() {
+        let words = EmojiSearchIndex(data: "🐒\tmono\n🎀\tlazo|moño")
+        XCTAssertEqual(words.search("mono"), ["🐒"])
+        XCTAssertEqual(words.search("MOÑO"), ["🎀"])
+    }
+
+    func testLoQueNoSeSabeDibujarNoSale() {
+        let filtered = EmojiSearchIndex(data: "🐈\tgato\n😺\tgato sonriendo", excluding: ["🐈"])
+        XCTAssertEqual(filtered.search("gato"), ["😺"])
+    }
+}

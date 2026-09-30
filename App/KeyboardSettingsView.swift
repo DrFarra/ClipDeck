@@ -186,6 +186,8 @@ struct KeyboardSettingsView: View {
             Toggle("Guardar automáticamente lo que copias", isOn: $config.autoCapture)
             Text("El teclado guarda en el historial lo que copias en cuanto aparece y, mientras está abierto, cada pocos segundos, sin abrir el portapapeles. iOS no deja a ninguna app leer el portapapeles en segundo plano: lo que copies con el teclado cerrado se guarda la próxima vez que lo abras o que abras ClipDeck.")
                 .font(.caption).foregroundStyle(.secondary)
+            Text("Cada vez que lo hace, iOS muestra arriba un aviso de que ClipDeck ha pegado desde otra app. Lo pone el sistema siempre que una app lee lo que copiaste en otra, y ninguna app puede ocultarlo. Si prefieres no verlo, desactiva esta opción: lo copiado se guardará cuando abras el portapapeles del teclado o lo pegues con el botón de la barra.")
+                .font(.caption).foregroundStyle(.secondary)
             Text("Cuando copias algo, la barra de sugerencias ofrece pegarlo durante un par de minutos. Para que iOS no pregunte «¿Permitir pegar?» cada vez: Ajustes → ClipDeck → Pegar desde otras apps → Permitir.")
                 .font(.caption).foregroundStyle(.secondary)
         }
