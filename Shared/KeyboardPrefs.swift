@@ -29,6 +29,7 @@ enum KbPrefs {
     static let punctLeft       = "kb.punctLeft"
     static let punctRight      = "kb.punctRight"
     static let undoCorrectOnDelete = "kb.undoCorrectOnDelete"
+    static let theme           = "kb.theme"             // id de KeyboardTheme
 
     static func double(_ key: String, default def: Double) -> Double {
         store.object(forKey: key) as? Double ?? def
@@ -63,6 +64,7 @@ enum KbPrefs {
         var punctRight: String
         /// Borrar justo después de una autocorrección la deshace (como Gboard).
         var undoCorrectOnDelete: Bool
+        var theme: String
 
         static func load() -> Config {
             Config(height: KbPrefs.double(KbPrefs.height, default: 330),
@@ -87,7 +89,8 @@ enum KbPrefs {
                    trackpadChars: KbPrefs.double(KbPrefs.trackpadChars, default: 38),
                    punctLeft: KbPrefs.store.string(forKey: KbPrefs.punctLeft) ?? ",",
                    punctRight: KbPrefs.store.string(forKey: KbPrefs.punctRight) ?? ".",
-                   undoCorrectOnDelete: KbPrefs.bool(KbPrefs.undoCorrectOnDelete, default: true))
+                   undoCorrectOnDelete: KbPrefs.bool(KbPrefs.undoCorrectOnDelete, default: true),
+                   theme: KbPrefs.store.string(forKey: KbPrefs.theme) ?? KeyboardTheme.defaultID)
         }
     }
 }

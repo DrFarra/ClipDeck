@@ -16,11 +16,35 @@ extension UIInputView: UIInputViewAudioFeedback {
 
 // MARK: - Contenedor raíz
 //
-// Un UIInputView con estilo de teclado: pinta el fondo gris de siempre de
-// ClipDeck, también dentro del cristal redondeado de iOS 26. Se probó a dejarlo
-// transparente y se volvió a este; los colores de `KeyStyle` son para él.
+// Una vista normal: el fondo lo pone el tema con `applyBackdrop`. El del tema
+// Clásico es el gris de teclado de siempre, un UIInputView con estilo
+// `.keyboard` por debajo de todo; Cristal no pone nada y deja ver el del
+// sistema (el cristal redondeado de iOS 26); los demás pintan su color.
 
-final class FeedbackHostView: UIInputView {
+final class FeedbackHostView: UIView {
+    private var backdropView: UIView?
+
+    func applyBackdrop(_ backdrop: KeyboardTheme.Backdrop) {
+        backdropView?.removeFromSuperview()
+        backdropView = nil
+        let view: UIView
+        switch backdrop {
+        case .clear:
+            return
+        case .keyboard:
+            view = UIInputView(frame: bounds, inputViewStyle: .keyboard)
+        case .solid(let color):
+            view = UIView(frame: bounds)
+            view.backgroundColor = color
+        case .gradient(let top, let bottom):
+            view = GradientBackdropView(top: top, bottom: bottom)
+        }
+        view.frame = bounds
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.isUserInteractionEnabled = false
+        insertSubview(view, at: 0)
+        backdropView = view
+    }
 
     /// Zonas que se quedan el toque pase lo que pase por encima.
     ///
@@ -40,6 +64,33 @@ final class FeedbackHostView: UIInputView {
     }
 }
 
+/// Fondo en degradado vertical (temas Medianoche, Océano, Lavanda).
+final class GradientBackdropView: UIView {
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+
+    private let top: UIColor
+    private let bottom: UIColor
+
+    init(top: UIColor, bottom: UIColor) {
+        self.top = top
+        self.bottom = bottom
+        super.init(frame: .zero)
+        updateColors()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        updateColors()
+    }
+
+    private func updateColors() {
+        guard let gradient = layer as? CAGradientLayer else { return }
+        gradient.colors = [top.resolvedColor(with: traitCollection).cgColor,
+                           bottom.resolvedColor(with: traitCollection).cgColor]
+    }
+}
+
 // MARK: - Especificación de tecla
 
 enum KeyKind { case char, shift, backspace, mode, globe, space, ret, comma, period }
@@ -49,7 +100,8 @@ struct KeySpec {
     var kind: KeyKind
     var widthFactor: CGFloat = 1
     var variants: [String] = []
-    /// Tecla de acción (Buscar, Enviar, Ir…): el nombre va en seminegrita.
+    /// Tecla de acción (Buscar, Enviar, Ir…): el nombre va en seminegrita y,
+    /// si el tema lo pide, la tecla en su color de acento.
     var accent: Bool = false
 }
 
@@ -145,6 +197,7 @@ final class KeyboardViewController: UIInputViewController {
     // UI
     private var root: FeedbackHostView!
     private let topBar = TopBarView()
+    private let pasteChip = PasteChipView()
     private let clipboardButton = IconTouchButton()
     private let emojiButton = IconTouchButton()
     private var suggestionButtons: [SuggestionButton] = []
@@ -165,6 +218,7 @@ final class KeyboardViewController: UIInputViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         config = KbPrefs.Config.load()
+        KeyStyle.theme = KeyboardTheme.named(config.theme)
         haptic.prepare()
 
         requestSupplementaryLexicon { [weak self] lex in
@@ -189,8 +243,10 @@ final class KeyboardViewController: UIInputViewController {
             }
         }
 
+        // El fondo lo pone el tema (ver `FeedbackHostView`).
+        view.backgroundColor = .clear
         inputView?.allowsSelfSizing = true
-        root = FeedbackHostView(frame: view.bounds, inputViewStyle: .keyboard)
+        root = FeedbackHostView(frame: view.bounds)
         root.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(root)
         NSLayoutConstraint.activate([
@@ -215,13 +271,13 @@ final class KeyboardViewController: UIInputViewController {
 
         popup.textAlignment = .center
         popup.font = .systemFont(ofSize: CGFloat(config.fontSize) + 12, weight: .medium)
-        popup.backgroundColor = KeyStyle.popup
         popup.layer.cornerRadius = 9
         popup.layer.masksToBounds = true
         popup.isHidden = true
         popup.isUserInteractionEnabled = false
         root.addSubview(popup)
 
+        applyTheme()
         rebuildKeys()
         precomputeChecker()
         prewarmClipboard()
@@ -267,6 +323,8 @@ final class KeyboardViewController: UIInputViewController {
         config = newConfig
         updateHeight()
         if changed {
+            KeyStyle.theme = KeyboardTheme.named(config.theme)
+            applyTheme()
             popup.font = .systemFont(ofSize: CGFloat(config.fontSize) + 12, weight: .medium)
             rebuildKeys()
         } else {
@@ -462,9 +520,16 @@ final class KeyboardViewController: UIInputViewController {
     /// apariencia clara u oscura. Sólo rehace las teclas si algo cambió.
     private func applyInputTraits() {
         let proxy = textDocumentProxy
+        let style: UIUserInterfaceStyle
+        switch KeyStyle.theme.appearance {
+        // Los temas claros y oscuros fijan la suya: si no, los textos del
+        // sistema (etiquetas, el panel del portapapeles) no se leerían.
+        case .light: style = .light
+        case .dark: style = .dark
         // Sólo se obedece un «oscuro» explícito: muchas apps dicen «claro» (o
         // un valor viejo) aunque el sistema esté en modo oscuro.
-        let style: UIUserInterfaceStyle = proxy.keyboardAppearance == .dark ? .dark : .unspecified
+        case .system: style = proxy.keyboardAppearance == .dark ? .dark : .unspecified
+        }
         if overrideUserInterfaceStyle != style { overrideUserInterfaceStyle = style }
         guard !searchingClips else { return }
 
@@ -532,6 +597,25 @@ final class KeyboardViewController: UIInputViewController {
         }
     }
 
+    // MARK: Tema
+
+    /// Pinta lo que no se rehace con las teclas: el fondo, la barra superior,
+    /// el globo de la tecla y los paneles. Las teclas toman el tema al
+    /// construirse (`rebuildKeys`), y la apariencia clara u oscura la fija
+    /// `applyInputTraits`.
+    private func applyTheme() {
+        let theme = KeyStyle.theme
+        root.applyBackdrop(theme.backdrop)
+        popup.backgroundColor = theme.popup
+        popup.textColor = theme.text
+        separatorViews.forEach { $0.backgroundColor = theme.separator }
+        suggestionButtons.forEach { $0.applyTheme() }
+        pasteChip.applyTheme()
+        searchField.applyTheme()
+        emojiPanel?.applyTheme()
+        updateTopIcons()
+    }
+
     // MARK: Barra superior
 
     private func setupTopBar() {
@@ -558,11 +642,13 @@ final class KeyboardViewController: UIInputViewController {
             suggestionButtons.append(b)
             if i > 0 {
                 let sep = UIView()
-                sep.backgroundColor = .separator
                 topBar.addSubview(sep)
                 separatorViews.append(sep)
             }
         }
+
+        pasteChip.onTap = { [weak self] kind in self?.pasteChipTapped(kind) }
+        topBar.addSubview(pasteChip)
 
         searchField.isHidden = true
         searchField.onClear = { [weak self] in
@@ -736,6 +822,7 @@ final class KeyboardViewController: UIInputViewController {
         for (i, sep) in separatorViews.enumerated() {
             sep.frame = CGRect(x: sugX + CGFloat(i + 1) * sugW - 0.5, y: topH / 2 - 10, width: 1, height: 20)
         }
+        pasteChip.frame = CGRect(x: sugX, y: 0, width: sugTotal, height: topH)
         searchField.frame = CGRect(x: sugX, y: 4, width: max(W - sugX - edge, 0), height: topH - 8)
 
         let areaY = topH
@@ -796,28 +883,30 @@ final class KeyboardViewController: UIInputViewController {
         let l = UILabel()
         l.font = .systemFont(ofSize: 13, weight: .medium)
         l.textAlignment = .center
-        l.textColor = .label
-        l.backgroundColor = UIColor.systemGray4
         l.layer.cornerRadius = 12
         l.layer.masksToBounds = true
-        l.numberOfLines = 1
+        l.numberOfLines = 0
         l.isHidden = true
         l.isUserInteractionEnabled = false
         return l
     }()
 
-    /// Aviso breve centrado (p. ej. al olvidar una sugerencia).
-    func showHint(_ text: String) {
+    /// Aviso breve centrado (p. ej. al olvidar una sugerencia). Los largos
+    /// (cómo pegar una imagen) ocupan dos líneas y duran más.
+    func showHint(_ text: String, duration: TimeInterval = 1.6) {
         if hintLabel.superview == nil { root.addSubview(hintLabel) }
-        hintLabel.text = "  \(text)  "
-        hintLabel.sizeToFit()
-        let w = min(hintLabel.bounds.width + 16, root.bounds.width - 16)
-        let h: CGFloat = 30
-        hintLabel.frame = CGRect(x: (root.bounds.width - w) / 2, y: topBar.frame.maxY, width: w, height: h)
+        hintLabel.text = text
+        hintLabel.textColor = KeyStyle.theme.text
+        hintLabel.backgroundColor = KeyStyle.theme.menu
+        let maxW = max(root.bounds.width - 24, 40)
+        let fitted = hintLabel.sizeThatFits(CGSize(width: maxW - 24, height: .greatestFiniteMagnitude))
+        let w = min(fitted.width + 24, maxW)
+        let h = max(fitted.height + 12, 30)
+        hintLabel.frame = CGRect(x: (root.bounds.width - w) / 2, y: topBar.frame.maxY + 2, width: w, height: h)
         hintLabel.isHidden = false
         root.bringSubviewToFront(hintLabel)
         NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(hideHint), object: nil)
-        perform(#selector(hideHint), with: nil, afterDelay: 1.6)
+        perform(#selector(hideHint), with: nil, afterDelay: duration)
     }
 
     @objc private func hideHint() { hintLabel.isHidden = true }
@@ -1203,7 +1292,7 @@ final class KeyboardViewController: UIInputViewController {
         keyViews.forEach { $0.setDimmed(true) }
 
         trackpadOverlay.frame = keyboardArea.frame
-        trackpadOverlay.backgroundColor = UIColor.systemGray4.withAlphaComponent(0.25)
+        trackpadOverlay.backgroundColor = KeyStyle.theme.function.withAlphaComponent(0.25)
         trackpadOverlay.isUserInteractionEnabled = false
         if trackpadOverlay.superview == nil { root.addSubview(trackpadOverlay) }
         trackpadOverlay.isHidden = false
@@ -1213,7 +1302,7 @@ final class KeyboardViewController: UIInputViewController {
             let l = UILabel()
             l.text = "Mueve el cursor"
             l.font = .systemFont(ofSize: 14, weight: .medium)
-            l.textColor = .secondaryLabel
+            l.textColor = KeyStyle.theme.secondaryText
             l.textAlignment = .center
             trackpadOverlay.addSubview(l)
             trackpadHint = l
@@ -1757,11 +1846,15 @@ final class KeyboardViewController: UIInputViewController {
     private func setSuggestions(_ words: [String]) {
         guard !searchingClips else { return }
         var titles = words
+        var paste: PasteChipView.Kind?
         if mode == .keys, let revert = validRevert() {
             titles = ["↺ " + revert.original] + Array(words.prefix(2))
-        } else if mode == .keys, currentWord().isEmpty, let chip = pasteChipTitle() {
-            titles = [chip] + Array(words.prefix(2))
+        } else if mode == .keys, currentWord().isEmpty, let kind = recentPasteKind() {
+            // Lo recién copiado ocupa la barra entera: nada de predicciones al lado.
+            paste = kind
+            titles = []
         }
+        if let paste { pasteChip.show(paste) } else { pasteChip.isHidden = true }
         for (i, b) in suggestionButtons.enumerated() {
             b.text = i < titles.count ? titles[i] : ""
         }
@@ -1775,10 +1868,6 @@ final class KeyboardViewController: UIInputViewController {
         wordTouches.removeAll(keepingCapacity: true)
         if title.hasPrefix("↺ ") {
             undoAutocorrect(fromBackspace: false)
-            return
-        }
-        if title == Self.pasteChip {
-            pasteRecent()
             return
         }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
@@ -1801,7 +1890,7 @@ final class KeyboardViewController: UIInputViewController {
     private func confirmForget(_ title: String) {
         var word = title
         if word.hasPrefix("↺ ") { word = String(word.dropFirst(2)) }
-        guard !word.isEmpty, word != Self.pasteChip else { return }
+        guard !word.isEmpty else { return }
         keyFeedback()
         showForgetConfirm(word: word)
     }
@@ -1809,15 +1898,20 @@ final class KeyboardViewController: UIInputViewController {
     // MARK: Pegar lo recién copiado
     //
     // Si se copió algo nuevo, la barra ofrece pegarlo de un toque, como
-    // Gboard. Para saberlo bastan `changeCount` y `hasStrings`, que no leen el
-    // contenido: iOS no pide «Permitir pegar» hasta que el usuario toca.
+    // Gboard. Para saber qué hay bastan `changeCount` y `hasImages`,
+    // `hasURLs` y `hasStrings`, que no leen el contenido: iOS no pide
+    // «Permitir pegar» hasta que el usuario toca.
+    //
+    // La imagen va primero: una captura o una foto copiadas suelen traer
+    // también un texto (el nombre o la fecha de la captura), y antes el chip
+    // pegaba ese texto. Un teclado no puede escribir imágenes, así que el
+    // chip lo dice y explica cómo pegarla.
 
-    private static let pasteChip = "📋 Pegar"
     private var pasteSeenCount = -1
     private var pasteSeenAt: CFTimeInterval = 0
-    private var pasteHasText = false
+    private var pasteKind: PasteChipView.Kind?
 
-    private func pasteChipTitle() -> String? {
+    private func recentPasteKind() -> PasteChipView.Kind? {
         guard hasFullAccess, numPad == nil else { return nil }
         let pasteboard = UIPasteboard.general
         let count = pasteboard.changeCount
@@ -1825,12 +1919,43 @@ final class KeyboardViewController: UIInputViewController {
         if count != pasteSeenCount {
             pasteSeenCount = count
             pasteSeenAt = CACurrentMediaTime()
-            pasteHasText = pasteboard.hasStrings || pasteboard.hasURLs
+            if pasteboard.hasImages {
+                pasteKind = .image
+            } else if pasteboard.hasURLs {
+                pasteKind = .link
+            } else if pasteboard.hasStrings {
+                pasteKind = .text
+            } else {
+                pasteKind = nil
+            }
         }
         // Sólo un rato: pasado ese tiempo ya no es «lo recién copiado».
-        guard pasteHasText, CACurrentMediaTime() - pasteSeenAt < 120 else { return nil }
-        return Self.pasteChip
+        guard CACurrentMediaTime() - pasteSeenAt < 120 else { return nil }
+        return pasteKind
     }
+
+    private func pasteChipTapped(_ kind: PasteChipView.Kind) {
+        keyFeedback()
+        switch kind {
+        case .text, .link:
+            pasteRecent()
+        case .image:
+            // Se queda en el portapapeles del sistema y entra en el historial.
+            if clipContainer == nil { clipContainer = ClipStore.makeContainer() }
+            if let container = clipContainer {
+                CaptureService.captureIfNeeded(context: ModelContext(container), lightweight: true)
+            }
+            AppGroup.sharedDefaults.set(UIPasteboard.general.changeCount, forKey: SettingsKeys.lastPasteboardChange)
+            allSnapshots = []
+            pasteChip.isHidden = true
+            showHint(Self.pasteImageHint, duration: 4)
+            scheduleSuggestions()
+        }
+    }
+
+    /// iOS no deja a los teclados de terceros escribir imágenes ni archivos,
+    /// sólo texto: se pegan desde el menú del propio campo.
+    private static let pasteImageHint = "iOS no deja a los teclados pegar imágenes. Mantén pulsado el campo de texto y toca «Pegar»."
 
     private func pasteRecent() {
         let pasteboard = UIPasteboard.general
@@ -1870,7 +1995,7 @@ final class KeyboardViewController: UIInputViewController {
         let card = UIView(frame: CGRect(x: (root.bounds.width - cardW) / 2,
                                         y: (root.bounds.height - cardH) / 2,
                                         width: cardW, height: cardH))
-        card.backgroundColor = .secondarySystemBackground
+        card.backgroundColor = KeyStyle.theme.letter
         card.layer.cornerRadius = 14
         dim.addSubview(card)
 
@@ -1879,6 +2004,7 @@ final class KeyboardViewController: UIInputViewController {
         label.textAlignment = .center
         label.font = .systemFont(ofSize: 15)
         label.text = "¿Olvidar «\(word)»?\nNo se volverá a sugerir."
+        label.textColor = KeyStyle.theme.text
         card.addSubview(label)
 
         let cancel = UIButton(type: .system)
@@ -1964,6 +2090,17 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func refreshMode() {
+        updateTopIcons()
+        emojiButton.isHidden = searchingClips
+        searchField.isHidden = !searchingClips
+        switch mode {
+        case .keys:      showKeyboard()
+        case .clipboard: showPanel(AnyView(clipboardPanel()))
+        case .emoji:     showEmojiPanel()
+        }
+    }
+
+    private func updateTopIcons() {
         if searchingClips {
             clipboardButton.setSymbol("chevron.backward", active: true)
         } else {
@@ -1972,13 +2109,6 @@ final class KeyboardViewController: UIInputViewController {
         }
         emojiButton.setSymbol(mode == .emoji ? "keyboard" : "face.smiling",
                               active: mode == .emoji)
-        emojiButton.isHidden = searchingClips
-        searchField.isHidden = !searchingClips
-        switch mode {
-        case .keys:      showKeyboard()
-        case .clipboard: showPanel(AnyView(clipboardPanel()))
-        case .emoji:     showEmojiPanel()
-        }
     }
 
     private func insertEmoji(_ emoji: String) {
@@ -1992,6 +2122,7 @@ final class KeyboardViewController: UIInputViewController {
     private func showEmojiPanel() {
         keyboardArea.isHidden = true
         panelHost?.view.isHidden = true
+        pasteChip.isHidden = true
         suggestionButtons.forEach { $0.isHidden = true }
         separatorViews.forEach { $0.isHidden = true }
         if emojiPanel == nil {
@@ -2020,6 +2151,7 @@ final class KeyboardViewController: UIInputViewController {
         emojiPanel?.isHidden = true
         keyboardArea.isHidden = false
         if searchingClips {
+            pasteChip.isHidden = true
             suggestionButtons.forEach { $0.isHidden = true }
             separatorViews.forEach { $0.isHidden = true }
             updateSearchField()
@@ -2033,6 +2165,7 @@ final class KeyboardViewController: UIInputViewController {
     private func showPanel(_ v: AnyView) {
         keyboardArea.isHidden = true
         emojiPanel?.isHidden = true
+        pasteChip.isHidden = true
         suggestionButtons.forEach { $0.isHidden = true }
         separatorViews.forEach { $0.isHidden = true }
         if panelHost == nil {
@@ -2101,30 +2234,51 @@ final class KeyboardViewController: UIInputViewController {
             mode = .keys
             refreshMode()
             updateShiftFromContext()
-        } else if snap.isImage {
-            copyImageToPasteboard(snap.id)
         } else {
-            showHint("Los archivos no se pueden pegar desde el teclado")
+            copyAssetToPasteboard(snap.id)
         }
     }
 
-    /// Un teclado no puede insertar imágenes: se copian y se pegan desde el
-    /// menú del campo. Antes pasaba sin avisar (y decodificando la imagen
-    /// entera): parecía que el toque no había hecho nada.
-    private func copyImageToPasteboard(_ id: UUID) {
+    /// Un teclado de terceros sólo puede escribir texto: iOS no le deja pegar
+    /// imágenes ni archivos en la app. Se dejan en el portapapeles del sistema
+    /// (los archivos con su nombre) y se explica cómo pegarlos desde el menú
+    /// del campo. Antes la imagen se copiaba con un aviso de un segundo y medio
+    /// y los archivos ni eso.
+    private func copyAssetToPasteboard(_ id: UUID) {
         guard let container = clipContainer else { return }
         let context = ModelContext(container)
         var descriptor = FetchDescriptor<ClipItem>(predicate: #Predicate { $0.id == id })
         descriptor.fetchLimit = 1
-        guard let item = try? context.fetch(descriptor).first, let data = item.assetData else {
-            showHint("No se encontró la imagen")
+        guard let item = try? context.fetch(descriptor).first else {
+            showHint("No se encontró en el historial")
             return
         }
-        let type = ImageTools.typeIdentifier(of: data) ?? UTType.jpeg.identifier
-        UIPasteboard.general.setData(data, forPasteboardType: type)
+        let isImage = item.type == .image
+        // Leer el archivo entero puede pasar del límite de memoria del teclado.
+        if let size = item.fileSize, size > 20_000_000 {
+            showHint("Es demasiado grande para copiarlo desde el teclado: ábrelo en ClipDeck", duration: 3)
+            return
+        }
+        guard let data = item.assetData, data.count <= 20_000_000 else {
+            showHint(isImage ? "No se encontró la imagen" : "No se encontró el archivo")
+            return
+        }
+        if isImage {
+            let type = ImageTools.typeIdentifier(of: data) ?? UTType.jpeg.identifier
+            UIPasteboard.general.setData(data, forPasteboardType: type)
+        } else {
+            let name = item.fileName ?? "Archivo"
+            let ext = (name as NSString).pathExtension
+            let type = UTType(filenameExtension: ext) ?? .data
+            let provider = NSItemProvider(item: data as NSData, typeIdentifier: type.identifier)
+            provider.suggestedName = (name as NSString).deletingPathExtension
+            UIPasteboard.general.setItemProviders([provider], localOnly: false, expirationDate: nil)
+        }
         // Que no vuelva a entrar al historial como captura nueva.
         AppGroup.sharedDefaults.set(UIPasteboard.general.changeCount, forKey: SettingsKeys.lastPasteboardChange)
-        showHint("Imagen copiada · mantén pulsado y Pegar")
+        let what = isImage ? "Imagen copiada" : "Archivo copiado"
+        showHint("\(what). iOS no deja a los teclados pegarlo: mantén pulsado el campo de texto y toca «Pegar».",
+                 duration: 4)
     }
 
     /// Prepara la base de datos por adelantado, en segundo plano.
@@ -2328,19 +2482,15 @@ final class KeyAreaView: UIView {
     }
 }
 
-// MARK: - Colores de tecla
+// MARK: - Tema activo
 //
-// Los de siempre de ClipDeck: teclas planas, sin sombra, sobre el fondo de
-// teclado de `FeedbackHostView`. Se probó a copiar los del teclado del sistema
-// (letras blancas con sombra, retorno en azul) y se volvió a estos.
+// Lo elige el usuario en la app (Configuración del teclado → Tema) y el
+// controlador lo fija al cargar la configuración. Las vistas lo leen al
+// construirse o al repintarse; el Clásico, el de por defecto, son los colores
+// de siempre.
 
 enum KeyStyle {
-    static let letter: UIColor = .secondarySystemBackground
-    static let function: UIColor = .systemGray4
-    static let pressed: UIColor = .systemGray2
-    static let shiftOn: UIColor = .systemGray
-    static let popup: UIColor = .systemGray3
-    static let accentBar: UIColor = .systemGray4
+    static var theme = KeyboardTheme.named(KeyboardTheme.defaultID)
 }
 
 // MARK: - Fila de teclas (UIKit)
@@ -2443,19 +2593,28 @@ final class KeyView: UIView {
         self.baseValue = spec.value
         super.init(frame: .zero)
 
-        layer.cornerRadius = 8
+        let theme = KeyStyle.theme
+        layer.cornerRadius = theme.cornerRadius
+        if theme.keyShadow != nil {
+            layer.shadowOffset = CGSize(width: 0, height: 1)
+            layer.shadowRadius = 0
+            layer.shadowOpacity = 1
+        }
+        if theme.keyBorder != nil {
+            layer.borderWidth = 1
+        }
         clipsToBounds = false
         isMultipleTouchEnabled = true
         isExclusiveTouch = false
 
         label.textAlignment = .center
-        label.textColor = .label
+        label.textColor = theme.text
         label.adjustsFontSizeToFitWidth = true
         label.minimumScaleFactor = 0.6
         addSubview(label)
 
         icon.contentMode = .center
-        icon.tintColor = .label
+        icon.tintColor = theme.text
         icon.isHidden = true
         addSubview(icon)
 
@@ -2469,12 +2628,17 @@ final class KeyView: UIView {
             } else {
                 label.text = spec.value
                 label.font = .systemFont(ofSize: 16, weight: spec.accent ? .semibold : .regular)
+                if spec.accent && theme.accentReturn { label.textColor = theme.accentText }
             }
-        case .space:     label.text = "espacio"; label.textColor = .secondaryLabel; label.font = .systemFont(ofSize: 15)
-        case .mode:      label.text = spec.value; label.font = .systemFont(ofSize: 16)
+        case .space:
+            label.text = "espacio"
+            label.textColor = theme.secondaryText
+            label.font = .systemFont(ofSize: 15, weight: theme.boldKeys ? .semibold : .regular)
+        case .mode:      label.text = spec.value; label.font = .systemFont(ofSize: 16, weight: theme.boldKeys ? .semibold : .regular)
         default:         label.text = spec.value
         }
         backgroundColor = baseColor(pressed: false)
+        updateLayerColors()
 
         // El globo pasa todos sus toques al sistema: un toque cambia de
         // teclado y una pulsación larga muestra la lista, como en iOS.
@@ -2510,6 +2674,21 @@ final class KeyView: UIView {
         label.frame = bounds.insetBy(dx: 2, dy: 0)
         icon.frame = bounds
         globeButton?.frame = bounds
+        if layer.shadowOpacity > 0 {
+            layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: layer.cornerRadius).cgPath
+        }
+    }
+
+    /// La sombra y el borde son CGColor: no cambian solos con el modo claro u oscuro.
+    private func updateLayerColors() {
+        let theme = KeyStyle.theme
+        layer.shadowColor = theme.keyShadow?.resolvedColor(with: traitCollection).cgColor
+        layer.borderColor = theme.keyBorder?.resolvedColor(with: traitCollection).cgColor
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        updateLayerColors()
     }
 
     @objc private func globeDown() {
@@ -2521,7 +2700,7 @@ final class KeyView: UIView {
 
     func setFontSize(_ size: CGFloat) {
         if spec.kind == .char || spec.kind == .comma || spec.kind == .period {
-            label.font = .systemFont(ofSize: size)
+            label.font = .systemFont(ofSize: size, weight: KeyStyle.theme.boldKeys ? .semibold : .regular)
         }
     }
 
@@ -2544,8 +2723,9 @@ final class KeyView: UIView {
         guard spec.kind == .shift else { return }
         shiftActive = active
         setIcon([caps ? "capslock.fill" : (active ? "shift.fill" : "shift")], fallback: caps ? "⇪" : "⇧")
-        icon.tintColor = active ? .white : .label
-        label.textColor = active ? .white : .label
+        let theme = KeyStyle.theme
+        icon.tintColor = active ? theme.shiftOnText : theme.text
+        label.textColor = active ? theme.shiftOnText : theme.text
         backgroundColor = baseColor(pressed: false)
     }
 
@@ -2554,14 +2734,16 @@ final class KeyView: UIView {
     }
 
     private func baseColor(pressed: Bool) -> UIColor {
-        if pressed { return KeyStyle.pressed }
+        let theme = KeyStyle.theme
         switch spec.kind {
         case .char, .space:
-            return KeyStyle.letter
-        case .shift where shiftActive:
-            return KeyStyle.shiftOn
+            return pressed ? theme.letterPressed : theme.letter
+        case .ret where spec.accent && theme.accentReturn:
+            return pressed ? theme.accent.withAlphaComponent(0.7) : theme.accent
+        case .shift where shiftActive && !pressed:
+            return theme.shiftOn
         default:
-            return KeyStyle.function
+            return pressed ? theme.functionPressed : theme.function
         }
     }
 
@@ -2813,8 +2995,20 @@ final class KeyView: UIView {
         var x = accentRTL ? kf.midX + cellW / 2 + 4 - w : kf.midX - cellW / 2 - 4
         x = min(max(x, 3), root.bounds.width - w - 3)
         let bar = UIView(frame: CGRect(x: x, y: max(kf.minY - hgt - 6, 2), width: w, height: hgt))
-        bar.backgroundColor = KeyStyle.accentBar
+        let theme = KeyStyle.theme
+        bar.backgroundColor = theme.menu
         bar.layer.cornerRadius = 10
+        // El Clásico lo tiene plano, como siempre; los temas con relieve, con sombra.
+        if theme.keyShadow != nil {
+            bar.layer.shadowColor = UIColor.black.cgColor
+            bar.layer.shadowOpacity = 0.25
+            bar.layer.shadowRadius = 4
+            bar.layer.shadowOffset = CGSize(width: 0, height: 1)
+        }
+        if let border = theme.keyBorder {
+            bar.layer.borderWidth = 1
+            bar.layer.borderColor = border.resolvedColor(with: traitCollection).cgColor
+        }
         root.addSubview(bar)
         // Mayúscula si lo que se escribió al apoyar ya lo era (la tecla ya
         // vuelve a minúscula después de la primera letra de la frase).
@@ -2849,8 +3043,9 @@ final class KeyView: UIView {
         let count = accentLabels.count
         for (slot, l) in accentLabels.enumerated() {
             let index = accentRTL ? count - 1 - slot : slot
-            l.backgroundColor = index == selectedAccent ? .tintColor : .clear
-            l.textColor = index == selectedAccent ? .white : .label
+            let theme = KeyStyle.theme
+            l.backgroundColor = index == selectedAccent ? theme.accent : .clear
+            l.textColor = index == selectedAccent ? theme.accentText : theme.text
         }
     }
 }
@@ -2955,7 +3150,7 @@ struct ClipboardPanel: View {
         .padding(.leading, 10)
         .padding(.trailing, 2)
         .frame(height: 32)
-        .background(Color(KeyStyle.letter), in: Capsule())
+        .background(Color(KeyStyle.theme.letter), in: Capsule())
         .contentShape(Capsule())
         .onTapGesture(perform: onSearch)
         .padding(.horizontal, 6)
@@ -2968,8 +3163,8 @@ struct ClipboardPanel: View {
             Text(text).font(.caption)
         }
         .padding(.horizontal, 10).frame(height: 28)
-        .background(active ? Color.accentColor.opacity(0.22) : Color(KeyStyle.letter), in: Capsule())
-        .foregroundStyle(active ? Color.accentColor : Color.primary)
+        .background(active ? Color(KeyStyle.theme.accent).opacity(0.22) : Color(KeyStyle.theme.letter), in: Capsule())
+        .foregroundStyle(active ? Color(KeyStyle.theme.accent) : Color.primary)
         .contentShape(Capsule())
         .onTapGesture(perform: action)
     }
@@ -2999,7 +3194,7 @@ struct ClipboardPanel: View {
             }
         }
         .padding(8).frame(height: 92, alignment: .topLeading)
-        .background(Color(KeyStyle.letter), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color(KeyStyle.theme.letter), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 
@@ -3016,11 +3211,9 @@ final class ClipSearchFieldView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = KeyStyle.letter
         layer.cornerRadius = 10
 
         icon.image = UIImage(systemName: "magnifyingglass")
-        icon.tintColor = .secondaryLabel
         icon.contentMode = .center
         addSubview(icon)
 
@@ -3028,28 +3221,40 @@ final class ClipSearchFieldView: UIView {
         label.lineBreakMode = .byTruncatingHead      // se ve siempre el final de lo escrito
         addSubview(label)
 
-        caret.backgroundColor = .tintColor
         caret.isUserInteractionEnabled = false
         addSubview(caret)
 
         countLabel.font = .systemFont(ofSize: 12)
-        countLabel.textColor = .secondaryLabel
         addSubview(countLabel)
 
         clearButton.setSymbol("xmark.circle.fill")
         clearButton.onTap = { [weak self] in self?.onClear?() }
         addSubview(clearButton)
         update(query: "", matches: nil)
+        applyTheme()
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    private var showsPlaceholder = true
+
+    func applyTheme() {
+        let theme = KeyStyle.theme
+        backgroundColor = theme.letter
+        icon.tintColor = theme.secondaryText
+        caret.backgroundColor = theme.accent
+        countLabel.textColor = theme.secondaryText
+        label.textColor = showsPlaceholder ? theme.secondaryText : theme.text
+        clearButton.setSymbol("xmark.circle.fill")
+    }
+
     func update(query: String, matches: Int?) {
+        showsPlaceholder = query.isEmpty
         if query.isEmpty {
             label.text = "Buscar en el portapapeles"
-            label.textColor = .secondaryLabel
+            label.textColor = KeyStyle.theme.secondaryText
         } else {
             label.text = query
-            label.textColor = .label
+            label.textColor = KeyStyle.theme.text
         }
         if let matches {
             countLabel.text = matches == 1 ? "1 resultado" : "\(matches) resultados"
@@ -3097,29 +3302,6 @@ final class ClipSearchFieldView: UIView {
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {}
 }
 
-// MARK: - Emojis
-
-enum EmojiStore {
-    static let recentsKey = "keyboard.recentEmojis"
-    static var recents: [String] { UserDefaults.standard.stringArray(forKey: recentsKey) ?? [] }
-    static func registerRecent(_ e: String) {
-        var l = recents; l.removeAll { $0 == e }; l.insert(e, at: 0)
-        UserDefaults.standard.set(Array(l.prefix(24)), forKey: recentsKey)
-    }
-    static let categories: [(icon: String, emojis: [String])] = [
-        ("😀", ["😀","😃","😄","😁","😆","😅","😂","🤣","🥲","🥹","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😗","😙","😚","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🥸","🤩","🥳","😏","😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😢","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🫣","🤗","🫡","🤔","🫢","🤭","🤫","🤥","😶","🫥","😐","😑","😬","🙄","😯","😦","😧","😮","😲","🥱","😴","🤤","😪","😵","😵‍💫","🫠","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻","💀","☠️","👽","👾","🤖","🎃","😺","😸","😹","😻","😼","😽","🙀","😿","😾"]),
-        ("👋", ["👋","🤚","🖐️","✋","🖖","🫱","🫲","🫳","🫴","👌","🤌","🤏","✌️","🤞","🫰","🤟","🤘","🤙","👈","👉","👆","🖕","👇","☝️","👍","👎","✊","👊","🤛","🤜","👏","🙌","🫶","👐","🤲","🤝","🙏","✍️","💅","🤳","💪","🦾","🦵","🦿","🦶","👣","👂","🦻","👃","🧠","🫀","🫁","🦷","🦴","👀","👁️","👅","👄","🫦","💋","🩸"]),
-        ("❤️", ["❤️","🧡","💛","💚","💙","🩵","💜","🖤","🤍","🤎","💔","❤️‍🔥","❤️‍🩹","❣️","💕","💞","💓","💗","💖","💘","💝","💟","♥️","💌","💐","🌹","🌷","🌸","💮","🏵️","🌺","🌻","🌼","🌈","⭐","🌟","✨","💫","🔥","💥","💯"]),
-        ("🐶", ["🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐻‍❄️","🐨","🐯","🦁","🐮","🐷","🐽","🐸","🐵","🙈","🙉","🙊","🐒","🐔","🐧","🐦","🐤","🐣","🦆","🦅","🦉","🦇","🐺","🐗","🐴","🦄","🐝","🪱","🐛","🦋","🐌","🐞","🐜","🪰","🐢","🐍","🦎","🦖","🐙","🦑","🦐","🦞","🦀","🐡","🐠","🐟","🐬","🐳","🐋","🦈","🐊","🐅","🐆","🦓","🦍","🐘","🦣","🦏","🐪","🐫","🦒","🐃","🐂","🐄","🐎","🐖","🐏","🐑","🦙","🐐","🦌","🐕","🐩","🦮","🐈","🐓","🦃","🦤","🦚","🦜","🦢","🕊️","🐇","🦝","🦨","🦡","🦫","🦦","🦥","🐁","🐀","🐿️","🦔"]),
-        ("🍕", ["🍏","🍎","🍐","🍊","🍋","🍌","🍉","🍇","🍓","🫐","🍈","🍒","🍑","🥭","🍍","🥥","🥝","🍅","🍆","🥑","🥦","🥬","🥒","🌶️","🫑","🌽","🥕","🫒","🧄","🧅","🥔","🍠","🥐","🥯","🍞","🥖","🥨","🧀","🥚","🍳","🧈","🥞","🧇","🥓","🥩","🍗","🍖","🌭","🍔","🍟","🍕","🫓","🥪","🥙","🧆","🌮","🌯","🫔","🥗","🥘","🫕","🍝","🍜","🍲","🍛","🍣","🍱","🥟","🦪","🍤","🍙","🍚","🍘","🍥","🥠","🍢","🍡","🍧","🍨","🍦","🥧","🧁","🍰","🎂","🍮","🍭","🍬","🍫","🍿","🍩","🍪","🌰","🥜","🍯","🥛","🍼","🫖","☕","🍵","🧃","🥤","🧋","🍶","🍺","🍻","🥂","🍷","🥃","🍸","🍹","🍾","🧉"]),
-        ("⚽", ["⚽","🏀","🏈","⚾","🥎","🎾","🏐","🏉","🥏","🎱","🪀","🏓","🏸","🏒","🏑","🥍","🏏","🪃","🥅","⛳","🪁","🏹","🎣","🤿","🥊","🥋","🎽","🛹","🛼","🛷","⛸️","🥌","🎿","⛷️","🏂","🪂","🏋️","🤼","🤸","🤺","⛹️","🤾","🏌️","🏇","🧘","🏄","🏊","🤽","🚣","🧗","🚴","🚵","🏆","🥇","🥈","🥉","🏅","🎖️","🏵️","🎗️","🎫","🎟️","🎪","🎭","🎨","🎬","🎤","🎧","🎼","🎹","🥁","🎷","🎺","🎸","🪕","🎻","🎲","♟️","🎯","🎳","🎮","🎰","🧩"]),
-        ("🚗", ["🚗","🚕","🚙","🚌","🚎","🏎️","🚓","🚑","🚒","🚐","🛻","🚚","🚛","🚜","🦯","🦽","🦼","🛴","🚲","🛵","🏍️","🛺","🚨","🚔","🚍","🚘","🚖","🚡","🚠","🚟","🚃","🚋","🚞","🚝","🚄","🚅","🚈","🚂","🚆","🚇","🚊","🚉","✈️","🛫","🛬","🛩️","💺","🛰️","🚀","🛸","🚁","🛶","⛵","🚤","🛥️","🛳️","⛴️","🚢","⚓","🪝","⛽","🚧","🚦","🚥","🗺️","🗿","🗽","🗼","🏰","🏯","🏟️","🎡","🎢","🎠","⛲","⛱️","🏖️","🏝️","🏔️","⛰️","🌋","🗻","🏕️","⛺","🏠","🏡","🏘️","🏙️","🌆","🌃","🌉","🌁"]),
-        ("💡", ["⌚","📱","📲","💻","⌨️","🖥️","🖨️","🖱️","🖲️","🕹️","🗜️","💽","💾","💿","📀","📼","📷","📸","📹","🎥","📽️","🎞️","📞","☎️","📟","📠","📺","📻","🎙️","🎚️","🎛️","🧭","⏱️","⏲️","⏰","🕰️","⌛","⏳","📡","🔋","🪫","🔌","💡","🔦","🕯️","🪔","🧯","🛢️","💸","💵","💴","💶","💷","🪙","💰","💳","🧾","💎","⚖️","🪜","🧰","🪛","🔧","🔨","⚒️","🛠️","⛏️","🪚","🔩","⚙️","🪤","🧱","⛓️","🧲","🔫","💣","🧨","🪓","🔪","🗡️","⚔️","🛡️","🚬","⚰️","🪦","⚱️","🏺","🔮","📿","🧿","💈","⚗️","🔭","🔬","🕳️","🩻","🩹","🩺","💊","💉","🩸","🧬","🦠","🧫","🧪","🌡️","🧹","🪠","🧺","🧻","🚽","🚰","🚿","🛁","🛀","🧼","🪥","🪒","🧽","🪣","🧴","🛎️","🔑","🗝️","🚪","🪑","🛋️","🛏️","🛌","🧸","🪆","🖼️","🪞","🪟","🛍️","🛒","🎁","🎈","🎏","🎀","🪄","🪅","🎊","🎉"]),
-        ("🔣", ["✅","❌","❎","✔️","☑️","❓","❔","❗","❕","‼️","⁉️","💯","🔞","📵","🚭","🚫","💤","♨️","💢","💬","🗨️","🗯️","💭","🔍","🔎","🔒","🔓","🔏","🔐","🔗","⛓️","📛","🆔","⚠️","🚸","☢️","☣️","⬆️","↗️","➡️","↘️","⬇️","↙️","⬅️","↖️","↕️","↔️","↩️","↪️","⤴️","⤵️","🔃","🔄","🔙","🔚","🔛","🔜","🔝","🛐","⚛️","🕉️","✡️","☸️","☯️","✝️","☦️","☪️","☮️","🕎","🔯","♈","♉","♊","♋","♌","♍","♎","♏","♐","♑","♒","♓","⛎","▶️","⏸️","⏯️","⏹️","⏺️","⏭️","⏮️","⏩","⏪","⏫","⏬","◀️","🔼","🔽","🔀","🔁","🔂","🔄","🔊","🔉","🔈","🔇","📢","📣","🔔","🔕","🎵","🎶","➕","➖","➗","✖️","🟰","♾️","💲","💱","™️","©️","®️","〰️","➰","➿","🔚","🔙","#️⃣","*️⃣","0️⃣","1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟","🔢","🔣","🔤","🅰️","🆎","🅱️","🆑","🆒","🆓","ℹ️","🆔","Ⓜ️","🆕","🆖","🅾️","🆗","🅿️","🆘","🆙","🆚","🈁","🔴","🟠","🟡","🟢","🔵","🟣","🟤","⚫","⚪","🟥","🟧","🟨","🟩","🟦","🟪","🟫","⬛","⬜","◼️","◻️","▪️","▫️","🔶","🔷","🔸","🔹","🔺","🔻","💠","🔘","🔳","🔲","🏁","🚩","🎌","🏴","🏳️","🏳️‍🌈","🏳️‍⚧️","🏴‍☠️"])
-    ]
-}
-
-
 // MARK: - Botón de sugerencia (toque propio, fiable en teclados)
 
 final class SuggestionButton: UIView {
@@ -3141,14 +3323,18 @@ final class SuggestionButton: UIView {
         super.init(frame: frame)
         label.textAlignment = .center
         label.font = .systemFont(ofSize: 17)
-        label.textColor = .label
         label.adjustsFontSizeToFitWidth = true
         label.minimumScaleFactor = 0.7
         label.lineBreakMode = .byTruncatingTail
         addSubview(label)
         layer.cornerRadius = 6
+        applyTheme()
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    func applyTheme() {
+        label.textColor = KeyStyle.theme.text
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -3159,7 +3345,7 @@ final class SuggestionButton: UIView {
         guard !text.isEmpty else { return }
         isDown = true
         didLong = false
-        backgroundColor = UIColor.systemGray4
+        backgroundColor = KeyStyle.theme.function
         longTimer?.invalidate()
         longTimer = KeyboardViewController.commonTimer(0.5) { [weak self] in
             guard let self, self.isDown else { return }
@@ -3185,316 +3371,6 @@ final class SuggestionButton: UIView {
     }
 }
 
-// MARK: - Panel de emojis en UIKit (scroll fluido + tonos de piel)
-
-final class EmojiCell: UICollectionViewCell {
-    let label = UILabel()
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        label.textAlignment = .center
-        label.font = .systemFont(ofSize: 30)
-        label.frame = bounds
-        label.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        contentView.addSubview(label)
-    }
-    required init?(coder: NSCoder) { fatalError() }
-}
-
-final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
-    var insert: ((String) -> Void)?
-    var backToKeys: (() -> Void)?
-    var deleteDown: (() -> Void)?
-    var deleteUp: (() -> Void)?
-
-    private var collection: UICollectionView!
-    private let bottomBar = UIView()
-    private let abcButton = UIButton(type: .system)
-    private let deleteButton = UIButton(type: .system)
-    private let categoryScroll = UIScrollView()
-    private var categoryButtons: [UIButton] = []
-
-    private var categoryIndex = -1            // -1 = recientes
-    private var current: [String] = []
-    private var tonePopup: UIView?
-
-    private let tonesKey = "keyboard.emojiTones"   // [baseEmoji: toneIndex 0...4]
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = .clear
-
-        let layout = UICollectionViewFlowLayout()
-        layout.scrollDirection = .vertical
-        layout.minimumInteritemSpacing = 0
-        layout.minimumLineSpacing = 2
-        collection = UICollectionView(frame: .zero, collectionViewLayout: layout)
-        collection.backgroundColor = .clear
-        collection.dataSource = self
-        collection.delegate = self
-        collection.alwaysBounceVertical = true
-        collection.register(EmojiCell.self, forCellWithReuseIdentifier: "e")
-        addSubview(collection)
-
-        let lp = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
-        lp.minimumPressDuration = 0.35
-        lp.allowableMovement = 30      // permite arrastrar hasta la barra de tonos
-        collection.addGestureRecognizer(lp)
-
-        bottomBar.backgroundColor = .clear
-        addSubview(bottomBar)
-
-        abcButton.setTitle("ABC", for: .normal)
-        abcButton.titleLabel?.font = .systemFont(ofSize: 15)
-        abcButton.setTitleColor(.label, for: .normal)
-        abcButton.backgroundColor = .secondarySystemBackground
-        abcButton.layer.cornerRadius = 7
-        abcButton.addTarget(self, action: #selector(tapABC), for: .touchDown)
-        bottomBar.addSubview(abcButton)
-
-        deleteButton.setImage(UIImage(systemName: "delete.left"), for: .normal)
-        deleteButton.tintColor = .label
-        deleteButton.backgroundColor = .secondarySystemBackground
-        deleteButton.layer.cornerRadius = 7
-        deleteButton.addTarget(self, action: #selector(delDown), for: .touchDown)
-        deleteButton.addTarget(self, action: #selector(delUp), for: [.touchUpInside, .touchUpOutside, .touchCancel])
-        bottomBar.addSubview(deleteButton)
-
-        categoryScroll.showsHorizontalScrollIndicator = false
-        bottomBar.addSubview(categoryScroll)
-        for (i, cat) in EmojiCatalog.categories.enumerated() {
-            let b = makeCatButton(cat.icon, index: i)
-            categoryScroll.addSubview(b)
-            categoryButtons.append(b)
-        }
-        // botón de recientes al inicio
-        let rec = makeCatButton("🕐", index: -1)
-        categoryScroll.addSubview(rec)
-        categoryButtons.insert(rec, at: 0)
-    }
-    required init?(coder: NSCoder) { fatalError() }
-
-    private func makeCatButton(_ icon: String, index: Int) -> UIButton {
-        let b = UIButton(type: .system)
-        b.setTitle(icon, for: .normal)
-        b.titleLabel?.font = .systemFont(ofSize: 18)
-        b.tag = index
-        b.layer.cornerRadius = 7
-        b.addTarget(self, action: #selector(tapCategory(_:)), for: .touchDown)
-        return b
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        let barH: CGFloat = 42
-        collection.frame = CGRect(x: 0, y: 2, width: bounds.width, height: bounds.height - barH - 2)
-        bottomBar.frame = CGRect(x: 0, y: bounds.height - barH, width: bounds.width, height: barH)
-
-        abcButton.frame = CGRect(x: 4, y: 4, width: 48, height: 34)
-        deleteButton.frame = CGRect(x: bounds.width - 48, y: 4, width: 44, height: 34)
-        categoryScroll.frame = CGRect(x: 56, y: 4, width: bounds.width - 56 - 52, height: 34)
-        var x: CGFloat = 0
-        for b in categoryButtons {
-            b.frame = CGRect(x: x, y: 0, width: 36, height: 34)
-            x += 38
-        }
-        categoryScroll.contentSize = CGSize(width: x, height: 34)
-        highlightCategory()
-    }
-
-    func reloadCurrent() {
-        var next: [String] = current
-        if categoryIndex == -1 {
-            let recents = EmojiStore.recents
-            next = recents.isEmpty ? EmojiCatalog.categories.first?.emojis ?? [] : recents
-        } else if categoryIndex >= 0 && categoryIndex < EmojiCatalog.categories.count {
-            next = EmojiCatalog.categories[categoryIndex].emojis
-        }
-        // Rehacer la cuadrícula de 1.900 celdas cuando no cambió nada era otro
-        // motivo de tirón al abrir el panel.
-        if next == current && !current.isEmpty {
-            highlightCategory()
-            return
-        }
-        current = next
-        collection.reloadData()
-        collection.setContentOffset(.zero, animated: false)
-        highlightCategory()
-    }
-
-    private func highlightCategory() {
-        for b in categoryButtons {
-            b.backgroundColor = (b.tag == categoryIndex) ? UIColor.tintColor.withAlphaComponent(0.22) : .clear
-        }
-    }
-
-    // Aplica el tono guardado a un emoji base (si lo tiene).
-    private func displayed(_ base: String) -> String {
-        guard let variants = EmojiCatalog.toneVariants[base] else { return base }
-        let dict = UserDefaults.standard.dictionary(forKey: tonesKey) as? [String: Int] ?? [:]
-        if let i = dict[base], variants.indices.contains(i) { return variants[i] }
-        return base
-    }
-
-    // MARK: DataSource
-
-    func collectionView(_ c: UICollectionView, numberOfItemsInSection s: Int) -> Int { current.count }
-
-    func collectionView(_ c: UICollectionView, cellForItemAt ip: IndexPath) -> UICollectionViewCell {
-        let cell = c.dequeueReusableCell(withReuseIdentifier: "e", for: ip) as! EmojiCell
-        cell.label.text = displayed(current[ip.item])
-        return cell
-    }
-
-    func collectionView(_ c: UICollectionView, layout: UICollectionViewLayout,
-                        sizeForItemAt ip: IndexPath) -> CGSize {
-        let cols: CGFloat = 8
-        let w = floor(bounds.width / cols)
-        return CGSize(width: w, height: 40)
-    }
-
-    func collectionView(_ c: UICollectionView, didSelectItemAt ip: IndexPath) {
-        insert?(displayed(current[ip.item]))
-    }
-
-    // MARK: Acciones
-
-    @objc private func tapABC() { backToKeys?() }
-    @objc private func delDown() { deleteDown?() }
-    @objc private func delUp() { deleteUp?() }
-    @objc private func tapCategory(_ sender: UIButton) {
-        categoryIndex = sender.tag
-        reloadCurrent()
-    }
-
-    // MARK: Tonos de piel
-    //
-    // Misma mecánica que el globo de acentos de las teclas: mantienes pulsado,
-    // aparece la barra, arrastras sin levantar el dedo y al soltar se inserta
-    // la opción marcada. Antes era un popup de botones que había que tocar
-    // aparte, y encima componía el tono pegando el modificador al final, cosa
-    // que sólo funciona en los emojis simples: en las secuencias con ZWJ
-    // (🧑‍🍳, 👩‍❤️‍👨…) el modificador va detrás de la persona, no al final. Ahora
-    // las variantes salen del catálogo de Unicode ya construidas.
-
-    /// Vibración al abrir el selector y al pasar de un tono a otro. Las pone el
-    /// controlador para respetar el ajuste de vibración en pulsación larga.
-    var onLongPressFeedback: (() -> Void)?
-    var onSelectionFeedback: (() -> Void)?
-
-    private var toneBase: String?
-    private var toneOptions: [String] = []
-    private var toneLabels: [UILabel] = []
-    private var toneBarFrame: CGRect = .zero
-    private var toneIndex = 0
-    private let toneCellWidth: CGFloat = 42
-
-    @objc private func handleLongPress(_ gr: UILongPressGestureRecognizer) {
-        switch gr.state {
-        case .began:
-            let pt = gr.location(in: collection)
-            guard let ip = collection.indexPathForItem(at: pt) else { return }
-            let base = current[ip.item]
-            guard let variants = EmojiCatalog.toneVariants[base],
-                  let cell = collection.cellForItem(at: ip) else { return }
-            openTonePicker(base: base, variants: variants, over: cell)
-        case .changed:
-            guard tonePopup != nil else { return }
-            updateToneSelection(at: gr.location(in: self).x)
-        case .ended:
-            guard tonePopup != nil else { return }
-            commitTone()
-        default:
-            closeTonePicker()
-        }
-    }
-
-    private func openTonePicker(base: String, variants: [String], over cell: UICollectionViewCell) {
-        closeTonePicker()
-        collection.isScrollEnabled = false      // el dedo elige, no desplaza
-        toneBase = base
-        toneOptions = [base] + variants
-
-        let w = CGFloat(toneOptions.count) * toneCellWidth + 8
-        let h: CGFloat = 50
-        let cf = cell.convert(cell.bounds, to: self)
-        var x = cf.midX - w / 2
-        x = min(max(x, 4), max(bounds.width - w - 4, 4))
-        let y = max(cf.minY - h - 4, 2)
-        let bar = UIView(frame: CGRect(x: x, y: y, width: w, height: h))
-        bar.backgroundColor = .systemGray4
-        bar.layer.cornerRadius = 12
-        bar.layer.shadowColor = UIColor.black.cgColor
-        bar.layer.shadowOpacity = 0.25
-        bar.layer.shadowRadius = 5
-        bar.layer.shadowOffset = CGSize(width: 0, height: 2)
-        addSubview(bar)
-
-        toneLabels = []
-        for (i, opt) in toneOptions.enumerated() {
-            let l = UILabel(frame: CGRect(x: 4 + CGFloat(i) * toneCellWidth, y: 5,
-                                          width: toneCellWidth, height: h - 10))
-            l.text = opt
-            l.textAlignment = .center
-            l.font = .systemFont(ofSize: 28)
-            l.layer.cornerRadius = 8
-            l.clipsToBounds = true
-            bar.addSubview(l)
-            toneLabels.append(l)
-        }
-        tonePopup = bar
-        toneBarFrame = bar.frame
-
-        // Arranca marcando el tono que ya tenías elegido para ese emoji.
-        let saved = UserDefaults.standard.dictionary(forKey: tonesKey) as? [String: Int] ?? [:]
-        var start = 0
-        if let i = saved[base], i >= 0, i < variants.count { start = i + 1 }
-        toneIndex = start
-        highlightTone()
-        onLongPressFeedback?()
-    }
-
-    private func updateToneSelection(at x: CGFloat) {
-        guard !toneOptions.isEmpty else { return }
-        let slot = Int(floor((x - toneBarFrame.minX - 4) / toneCellWidth))
-        let clamped = min(max(slot, 0), toneOptions.count - 1)
-        guard clamped != toneIndex else { return }
-        toneIndex = clamped
-        highlightTone()
-        onSelectionFeedback?()
-    }
-
-    private func highlightTone() {
-        for (i, l) in toneLabels.enumerated() {
-            l.backgroundColor = i == toneIndex ? UIColor.tintColor : .clear
-        }
-    }
-
-    private func commitTone() {
-        guard let base = toneBase, toneOptions.indices.contains(toneIndex) else {
-            closeTonePicker()
-            return
-        }
-        let result = toneOptions[toneIndex]
-        var dict = UserDefaults.standard.dictionary(forKey: tonesKey) as? [String: Int] ?? [:]
-        if toneIndex == 0 { dict[base] = nil } else { dict[base] = toneIndex - 1 }
-        UserDefaults.standard.set(dict, forKey: tonesKey)
-        closeTonePicker()
-        insert?(result)
-        EmojiStore.registerRecent(result)
-        collection.reloadData()
-    }
-
-    private func closeTonePicker() {
-        tonePopup?.removeFromSuperview()
-        tonePopup = nil
-        toneLabels = []
-        toneOptions = []
-        toneBase = nil
-        collection.isScrollEnabled = true
-    }
-}
-
-
 // MARK: - Botón de icono con toque directo
 //
 // Los UIButton dentro de una extensión de teclado pueden tragarse el primer
@@ -3512,7 +3388,7 @@ final class IconTouchButton: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         imageView.contentMode = .center
-        imageView.tintColor = .label
+        imageView.tintColor = KeyStyle.theme.text
         imageView.isUserInteractionEnabled = false
         addSubview(imageView)
         layer.cornerRadius = 8
@@ -3530,8 +3406,9 @@ final class IconTouchButton: UIView {
         imageView.image = UIImage(systemName: name,
                                   withConfiguration: UIImage.SymbolConfiguration(pointSize: 19,
                                                                                  weight: .medium))
-        imageView.tintColor = active ? .tintColor : .label
-        backgroundColor = active ? UIColor.tintColor.withAlphaComponent(0.22) : .clear
+        let theme = KeyStyle.theme
+        imageView.tintColor = active ? theme.accent : theme.text
+        backgroundColor = active ? theme.accent.withAlphaComponent(0.22) : .clear
     }
 
     /// Dispara la acción con un destello bien visible.
@@ -3549,7 +3426,7 @@ final class IconTouchButton: UIView {
 
     private func flash() {
         let normal = backgroundColor
-        backgroundColor = UIColor.systemGray2
+        backgroundColor = KeyStyle.theme.functionPressed
         UIView.animate(withDuration: 0.22) { self.backgroundColor = normal }
     }
 

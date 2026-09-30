@@ -1,5 +1,6 @@
 import XCTest
 import SwiftData
+import UIKit
 
 // Las fuentes de `Shared` se compilan dentro de este bundle, así que los tipos
 // se usan directamente sin `@testable import`.
@@ -289,5 +290,39 @@ final class SwipeLexiconTests: XCTestCase {
         XCTAssertEqual(snapshot.masks.count, snapshot.count)
         XCTAssertEqual(snapshot.priors.count, snapshot.count)
         XCTAssertEqual(snapshot.flat.count, snapshot.lens.reduce(0) { $0 + Int($1) })
+    }
+}
+
+// MARK: - Temas del teclado
+
+final class KeyboardThemeTests: XCTestCase {
+
+    func testLosIdsNoSeRepiten() {
+        let ids = KeyboardTheme.all.map(\.id)
+        XCTAssertEqual(Set(ids).count, ids.count)
+    }
+
+    func testPorDefectoEsElClasico() {
+        XCTAssertEqual(KeyboardTheme.defaultID, "classic")
+        XCTAssertEqual(KeyboardTheme.named(KeyboardTheme.defaultID).name, "Clásico")
+    }
+
+    func testUnTemaQueYaNoExisteVuelveAlClasico() {
+        XCTAssertEqual(KeyboardTheme.named("tema-borrado").id, KeyboardTheme.defaultID)
+    }
+
+    func testCadaFamiliaTieneTemas() {
+        for family in KeyboardTheme.Family.allCases {
+            XCTAssertFalse(KeyboardTheme.all.filter { $0.family == family }.isEmpty, family.rawValue)
+        }
+    }
+
+    func testLosTemasDeAparienciaFijaNoCambianConElModo() {
+        let light = UITraitCollection(userInterfaceStyle: .light)
+        let dark = UITraitCollection(userInterfaceStyle: .dark)
+        for theme in KeyboardTheme.all where theme.appearance != .system {
+            XCTAssertEqual(theme.letter.resolvedColor(with: light), theme.letter.resolvedColor(with: dark), theme.name)
+            XCTAssertEqual(theme.text.resolvedColor(with: light), theme.text.resolvedColor(with: dark), theme.name)
+        }
     }
 }

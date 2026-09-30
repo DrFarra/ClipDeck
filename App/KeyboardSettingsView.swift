@@ -17,6 +17,7 @@ struct KeyboardSettingsView: View {
 
     var body: some View {
         Form {
+            themeSection
             designSection
             punctuationSection
             writingSection
@@ -49,6 +50,28 @@ struct KeyboardSettingsView: View {
     }
 
     // MARK: Secciones
+
+    @ViewBuilder private var themeSection: some View {
+        let theme = KeyboardTheme.named(config.theme)
+        Section("Tema") {
+            NavigationLink {
+                KeyboardThemePicker(selection: $config.theme)
+            } label: {
+                HStack(spacing: 12) {
+                    KeyboardThemePreview(theme: theme, showsLabels: false)
+                        .frame(width: 76, height: 48)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(theme.name)
+                        Text(theme.audience)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
 
     @ViewBuilder private var designSection: some View {
         Section("Diseño") {
@@ -224,5 +247,6 @@ struct KeyboardSettingsView: View {
         store.set(config.punctLeft, forKey: KbPrefs.punctLeft)
         store.set(config.punctRight, forKey: KbPrefs.punctRight)
         store.set(config.undoCorrectOnDelete, forKey: KbPrefs.undoCorrectOnDelete)
+        store.set(config.theme, forKey: KbPrefs.theme)
     }
 }
