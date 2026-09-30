@@ -76,69 +76,102 @@ final class SwipeLexicon {
         KbPrefs.store.integer(forKey: progressKey) >= SwipeAlphabet.count && builtCount > 200
     }
 
-    private(set) var words: [String] = []
-    private(set) var flat: [UInt8] = []
-    private(set) var starts: [Int32] = []
-    private(set) var lens: [UInt8] = []
-    private(set) var masks: [UInt32] = []
-    private(set) var priors: [UInt8] = []
-    /// true si se pudo cargar el diccionario del sistema (no sólo el mínimo).
-    private(set) var hasSystemWords = false
+    /// Vocabulario ya armado, inmutable.
+    ///
+    /// El corrector y el reconocedor de trazos lo leen desde otros hilos
+    /// mientras la carga puede seguir en marcha. Antes los arrays se rellenaban
+    /// en su sitio y `isLoaded` ya decía que sí con la primera palabra: una
+    /// palabra corregida en el primer segundo recorría arrays a medio crecer
+    /// (y de distinto largo entre sí), lo que podía tumbar el teclado. Ahora se
+    /// construye aparte y se publica de una sola vez.
+    struct Snapshot {
+        let words: [String]
+        let flat: [UInt8]
+        let starts: [Int32]
+        let lens: [UInt8]
+        let masks: [UInt32]
+        let priors: [UInt8]
+        /// true si se pudo cargar el diccionario del sistema (no sólo el mínimo).
+        let hasSystemWords: Bool
 
-    var count: Int { words.count }
-    var isLoaded: Bool { !words.isEmpty }
+        var count: Int { words.count }
+    }
 
-    private var seen = Set<String>()
-    private var trackSeen = true
-    private let lock = NSLock()
+    private var current: Snapshot?
+    /// Protege `current`. Se retiene sólo un instante: nunca durante la carga.
+    private let stateLock = NSLock()
+    /// Serializa las cargas (que sí tardan).
+    private let loadLock = NSLock()
+
+    /// Vocabulario publicado, o nil mientras no termine de cargarse.
+    var snapshot: Snapshot? {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return current
+    }
+
+    var isLoaded: Bool { snapshot != nil }
+    var count: Int { snapshot?.count ?? 0 }
+    var hasSystemWords: Bool { snapshot?.hasSystemWords ?? false }
 
     // MARK: Construcción en memoria
 
-    private func reset() {
-        words.removeAll(); flat.removeAll(); starts.removeAll()
-        lens.removeAll(); masks.removeAll(); priors.removeAll()
-        seen.removeAll(); trackSeen = true; hasSystemWords = false
-    }
+    private struct Builder {
+        var words: [String] = []
+        var flat: [UInt8] = []
+        var starts: [Int32] = []
+        var lens: [UInt8] = []
+        var masks: [UInt32] = []
+        var priors: [UInt8] = []
+        var seen = Set<String>()
+        var trackSeen = true
+        var hasSystemWords = false
 
-    private func add(_ raw: String, prior: UInt8) {
-        let w = raw.lowercased()
-        guard w.count >= 2, w.count <= 18 else { return }
-        if trackSeen {
-            if seen.contains(w) { return }
-            seen.insert(w)
-        } else if seen.contains(w) {
-            return
+        mutating func add(_ raw: String, prior: UInt8) {
+            let w = raw.lowercased()
+            guard w.count >= 2, w.count <= 18 else { return }
+            if trackSeen {
+                if seen.contains(w) { return }
+                seen.insert(w)
+            } else if seen.contains(w) {
+                return
+            }
+            guard let enc = SwipeAlphabet.encode(w) else { return }
+            var mask: UInt32 = 0
+            for i in enc { mask |= (UInt32(1) << UInt32(i)) }
+            starts.append(Int32(flat.count))
+            flat.append(contentsOf: enc)
+            lens.append(UInt8(enc.count))
+            masks.append(mask)
+            priors.append(prior)
+            words.append(w)
         }
-        guard let enc = SwipeAlphabet.encode(w) else { return }
-        var mask: UInt32 = 0
-        for i in enc { mask |= (UInt32(1) << UInt32(i)) }
-        starts.append(Int32(flat.count))
-        flat.append(contentsOf: enc)
-        lens.append(UInt8(enc.count))
-        masks.append(mask)
-        priors.append(prior)
-        words.append(w)
+
+        func finish() -> Snapshot {
+            Snapshot(words: words, flat: flat, starts: starts, lens: lens,
+                     masks: masks, priors: priors, hasSystemWords: hasSystemWords)
+        }
     }
 
     /// Carga el vocabulario en memoria. Pesado: llamar en segundo plano.
     func load() {
-        lock.lock(); defer { lock.unlock() }
+        loadLock.lock(); defer { loadLock.unlock() }
         guard !isLoaded else { return }
-        reset()
+        var builder = Builder()
 
-        // 1. Vocabulario propio del usuario.
-        for (w, c) in WordLearner.learnedWords() {
-            add(w, prior: UInt8(min(200 + c * 4, 255)))
+        // 1. Vocabulario propio del usuario (lo usado una sola vez puede ser
+        //    una errata: no entra hasta que se repite).
+        for (w, c) in WordLearner.learnedWords() where c >= WordLearner.minUses {
+            builder.add(w, prior: UInt8(min(200 + c * 4, 255)))
         }
         // 2. Palabras de uso diario.
-        for w in KbData.commonWords { add(w, prior: 190) }
+        for w in KbData.commonWords { builder.add(w, prior: 190) }
 
         // 3. Diccionario del sistema recolectado por la app. Se recorre por
         //    bytes: convertir 800 KB a String y recorrerlo carácter a carácter
         //    era mucho más lento que separar por saltos de línea en crudo.
-        trackSeen = false
+        builder.trackSeen = false
         if let data = try? Data(contentsOf: Self.fileURL), !data.isEmpty {
-            hasSystemWords = true
+            builder.hasSystemWords = true
             let newline = UInt8(ascii: "\n")
             let tab = UInt8(ascii: "\t")
             for line in data.split(separator: newline, omittingEmptySubsequences: true) {
@@ -150,18 +183,23 @@ final class SwipeLexicon {
                 for b in line[line.index(after: tabIndex)...] where b >= 48 && b <= 57 {
                     value = value * 10 + Int(b - 48)
                 }
-                add(word, prior: UInt8(min(max(value, 5), 180)))
+                builder.add(word, prior: UInt8(min(max(value, 5), 180)))
             }
         }
-        seen = []
+        builder.seen = []
+
+        let built = builder.finish()
+        stateLock.lock()
+        current = built
+        stateLock.unlock()
     }
 
-    /// Vuelve a incorporar las palabras aprendidas sin releer todo el archivo.
+    /// Descarta lo cargado: la próxima carga incorpora las palabras aprendidas
+    /// sin tocar lo que otro hilo esté leyendo (se queda con su copia).
     func invalidate() {
-        lock.lock()
-        let wasLoaded = isLoaded
-        if wasLoaded { reset() }
-        lock.unlock()
+        stateLock.lock()
+        current = nil
+        stateLock.unlock()
     }
 
     // MARK: Recolección del diccionario del sistema (se ejecuta en la app)

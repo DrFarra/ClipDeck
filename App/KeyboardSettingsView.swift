@@ -77,10 +77,13 @@ struct KeyboardSettingsView: View {
         Section("Escritura") {
             Toggle("Predicción de palabras", isOn: $config.prediction)
             Toggle("Autocorrección", isOn: $config.autocorrect)
+            Toggle("Borrar deshace la autocorrección", isOn: $config.undoCorrectOnDelete)
             Toggle("Aprender mis palabras", isOn: $config.learnWords)
             Toggle("Acentos con pulsación larga", isOn: $config.accents)
             Toggle("Doble espacio inserta punto", isOn: $config.doubleSpace)
             Toggle("Mayúsculas automáticas", isOn: $config.autoCapital)
+            Text("Si el teclado corrige una palabra que querías tal cual, pulsa borrar justo después: vuelve a como la escribiste y no se corrige más. Las sustituciones de texto de Ajustes → General → Teclado también funcionan aquí.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -153,7 +156,11 @@ struct KeyboardSettingsView: View {
             Toggle("Vibración de teclas", isOn: $config.haptics)
             Toggle("Vibración en pulsación larga", isOn: $config.hapticsLongPress)
             Toggle("Sonido de tecla", isOn: $config.sound)
-            Text("La segunda es independiente: vibra al abrir el globo de acentos, al pasar entre sus opciones y al activar el trackpad, aunque tengas apagada la de teclas.")
+            Text("La segunda es independiente: vibra al abrir el globo de acentos, al pasar entre sus opciones y al activar el trackpad, aunque tengas apagada la de teclas. El sonido usa el clic del sistema: suena si están activados los clics del teclado en Ajustes → Sonidos y vibraciones. La vibración y el sonido necesitan «Permitir acceso completo».")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        Section("Pegar desde el teclado") {
+            Text("Cuando copias algo, la barra de sugerencias ofrece «📋 Pegar» durante un par de minutos. Para que iOS no pregunte «¿Permitir pegar?» cada vez: Ajustes → ClipDeck → Pegar desde otras apps → Permitir.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -216,5 +223,6 @@ struct KeyboardSettingsView: View {
         store.set(config.trackpadChars, forKey: KbPrefs.trackpadChars)
         store.set(config.punctLeft, forKey: KbPrefs.punctLeft)
         store.set(config.punctRight, forKey: KbPrefs.punctRight)
+        store.set(config.undoCorrectOnDelete, forKey: KbPrefs.undoCorrectOnDelete)
     }
 }
