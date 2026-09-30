@@ -18,11 +18,7 @@ struct KeyboardThemePicker: View {
                             LazyVGrid(columns: columns, spacing: 14) {
                                 ForEach(themes) { theme in
                                     KeyboardThemeCard(theme: theme, selected: theme.id == selection)
-                                        .onTapGesture {
-                                            guard selection != theme.id else { return }
-                                            selection = theme.id
-                                            Haptics.light()
-                                        }
+                                        .onTapGesture { choose(theme) }
                                 }
                             }
                         }
@@ -37,6 +33,17 @@ struct KeyboardThemePicker: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle("Tema del teclado")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// Se guarda aquí mismo, al tocar. La pantalla de ajustes guarda con su
+    /// `onChange`, que con esta pantalla encima puede no llegar a ejecutarse
+    /// antes de que el usuario salga de la app: el teclado seguía con el tema
+    /// anterior.
+    private func choose(_ theme: KeyboardTheme) {
+        guard selection != theme.id else { return }
+        selection = theme.id
+        KbPrefs.store.set(theme.id, forKey: KbPrefs.theme)
+        Haptics.light()
     }
 }
 

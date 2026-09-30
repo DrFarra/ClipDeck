@@ -283,6 +283,7 @@ final class KeyboardViewController: UIInputViewController {
         precomputeChecker()
         prewarmClipboard()
         prepareSwipe()
+        observeHostForeground()
     }
 
     /// Carga el vocabulario de deslizamiento en segundo plano: leerlo en el
@@ -319,23 +320,41 @@ final class KeyboardViewController: UIInputViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
-        // Recarga preferencias por si cambiaron en la app.
-        let newConfig = KbPrefs.Config.load()
-        let changed = newConfig != config
-        config = newConfig
-        updateHeight()
-        if changed {
-            KeyStyle.theme = KeyboardTheme.named(config.theme)
-            applyTheme()
-            popup.font = .systemFont(ofSize: CGFloat(config.fontSize) + 12, weight: .medium)
-            rebuildKeys()
-        } else {
-            updateKeyCaps()
-        }
+        if !reloadConfig() { updateKeyCaps() }
         applyInputTraits()
         updateShiftFromContext()
         noteOwnEdit()
         haptic.prepare()
+        if mode == .keys { showKeyboard() }
+    }
+
+    /// Recarga las preferencias por si cambiaron en la app y, si cambiaron,
+    /// aplica el tema y rehace las teclas. Devuelve si hubo cambios.
+    @discardableResult
+    private func reloadConfig() -> Bool {
+        let newConfig = KbPrefs.Config.load()
+        let changed = newConfig != config
+        config = newConfig
+        updateHeight()
+        guard changed else { return false }
+        KeyStyle.theme = KeyboardTheme.named(config.theme)
+        applyTheme()
+        popup.font = .systemFont(ofSize: CGFloat(config.fontSize) + 12, weight: .medium)
+        rebuildKeys()
+        return true
+    }
+
+    /// Volver a una app que ya tenía el teclado abierto no siempre pasa por
+    /// `viewWillAppear`: el teclado seguía con el tema y los ajustes de antes
+    /// de ir a cambiarlos en ClipDeck.
+    private func observeHostForeground() {
+        NotificationCenter.default.addObserver(self, selector: #selector(hostWillEnterForeground),
+                                               name: .NSExtensionHostWillEnterForeground, object: nil)
+    }
+
+    @objc private func hostWillEnterForeground() {
+        guard reloadConfig() else { return }
+        applyInputTraits()
         if mode == .keys { showKeyboard() }
     }
 
