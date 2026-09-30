@@ -3181,7 +3181,7 @@ struct ClipboardPanel: View {
                 Label("Sensible", systemImage: "eye.slash").font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else if let thumbnail = snap.thumbnail {
-                Image(uiImage: thumbnail).resizable().scaledToFill()
+                FillImage(image: thumbnail)
                     .frame(maxWidth: .infinity).frame(height: 54)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
             } else if snap.isImage {

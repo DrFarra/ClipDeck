@@ -106,9 +106,7 @@ struct ClipCardView: View {
 
     @ViewBuilder private var imageBody: some View {
         if let data = item.assetData, let uiImage = UIImage(data: data) {
-            Image(uiImage: uiImage)
-                .resizable()
-                .scaledToFill()
+            FillImage(image: uiImage)
                 .frame(maxWidth: .infinity)
                 .frame(height: imageHeight)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -128,9 +126,7 @@ struct ClipCardView: View {
     @ViewBuilder private var linkBody: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let data = item.previewImageData, let uiImage = UIImage(data: data) {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .scaledToFill()
+                FillImage(image: uiImage)
                     .frame(maxWidth: .infinity)
                     .frame(height: 110)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))

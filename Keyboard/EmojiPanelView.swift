@@ -220,6 +220,18 @@ final class EmojiBarButton: UIView {
     }
 }
 
+// MARK: - Pulsación larga sólo donde hay tonos
+
+/// Delegado de la pulsación larga de los tonos. El delegado de un gesto es
+/// `weak`, así que lo guarda el panel.
+private final class ToneGestureGate: NSObject, UIGestureRecognizerDelegate {
+    var shouldBegin: ((UIGestureRecognizer) -> Bool)?
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        shouldBegin?(gestureRecognizer) ?? true
+    }
+}
+
 // MARK: - Panel de emojis
 //
 // Todas las categorías en un solo desplazamiento vertical con su título, como
@@ -268,6 +280,7 @@ final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionView
     private var lastWidth: CGFloat = 0
 
     private let tonesKey = "keyboard.emojiTones"   // [emoji base: índice del tono]
+    private let toneGate = ToneGestureGate()
     private lazy var savedTones: [String: Int] =
         UserDefaults.standard.dictionary(forKey: tonesKey) as? [String: Int] ?? [:]
 
@@ -293,6 +306,14 @@ final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionView
         let lp = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         lp.minimumPressDuration = 0.35
         lp.allowableMovement = 30      // permite arrastrar hasta el selector de tono
+        // Sólo sobre emojis con tonos. Antes empezaba sobre cualquiera: si el
+        // dedo tardaba en moverse, a los 0,35 s la pulsación larga se quedaba
+        // el toque y el desplazamiento no arrancaba hasta volver a intentarlo.
+        toneGate.shouldBegin = { [weak self] gr in
+            guard let self else { return false }
+            return self.baseWithTones(at: gr.location(in: self.collection)) != nil
+        }
+        lp.delegate = toneGate
         collection.addGestureRecognizer(lp)
 
         bottomBar.backgroundColor = .clear
@@ -372,6 +393,13 @@ final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionView
         guard let i = savedTones[base], let variants = toneVariants(of: base).list,
               variants.indices.contains(i) else { return base }
         return variants[i]
+    }
+
+    /// El emoji bajo el dedo, si tiene tonos que elegir.
+    private func baseWithTones(at point: CGPoint) -> String? {
+        guard let ip = collection.indexPathForItem(at: point) else { return nil }
+        let base = sections[ip.section].emojis[ip.item]
+        return toneVariants(of: base).list == nil ? nil : base
     }
 
     private func toneVariants(of base: String) -> (list: [String]?, isPair: Bool) {
