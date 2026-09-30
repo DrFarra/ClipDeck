@@ -220,6 +220,7 @@ final class KeyboardViewController: UIInputViewController {
         config = KbPrefs.Config.load()
         KeyStyle.theme = KeyboardTheme.named(config.theme)
         haptic.prepare()
+        setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
 
         requestSupplementaryLexicon { [weak self] lex in
             var words: [String] = []
@@ -317,6 +318,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
         // Recarga preferencias por si cambiaron en la app.
         let newConfig = KbPrefs.Config.load()
         let changed = newConfig != config
@@ -353,15 +355,35 @@ final class KeyboardViewController: UIInputViewController {
     /// el «123» respondían tarde o se perdían al teclear rápido. Cuelgan de la
     /// ventana o de alguna vista intermedia, así que se recorre toda la cadena
     /// y se repite cuando cambia la jerarquía.
+    ///
+    /// No basta con el principio del toque. Retenían también el final (los
+    /// iconos de portapapeles y emojis actúan al levantar el dedo, y cambiaban
+    /// de vista con retraso) y cancelaban los toques cuando un deslizamiento
+    /// rápido les parecía un gesto de borde: en el panel de emojis, un
+    /// deslizamiento rápido no desplazaba nada. Es la receta que funcionó en
+    /// los foros de desarrolladores de Apple (hilo 654645): pedir los bordes
+    /// al sistema, quitar las tres esperas y apagar los gestos de borde.
     private func releaseEdgeTouches() {
+        var views: [UIView] = []
         var current: UIView? = view
         while let v = current {
-            for recognizer in v.gestureRecognizers ?? [] where recognizer.delaysTouchesBegan {
-                recognizer.delaysTouchesBegan = false
-            }
+            views.append(v)
             current = v.superview
         }
+        if let rootView = view.window?.rootViewController?.view, !views.contains(rootView) {
+            views.append(rootView)
+        }
+        for v in views {
+            for recognizer in v.gestureRecognizers ?? [] {
+                recognizer.delaysTouchesBegan = false
+                recognizer.delaysTouchesEnded = false
+                recognizer.cancelsTouchesInView = false
+                if recognizer is UIScreenEdgePanGestureRecognizer { recognizer.isEnabled = false }
+            }
+        }
     }
+
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { [.left, .right] }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
@@ -2160,6 +2182,14 @@ final class KeyboardViewController: UIInputViewController {
             separatorViews.forEach { $0.isHidden = false }
             scheduleSuggestions()
         }
+        // Los recientes se rehacen con el panel de emojis oculto, mientras se
+        // escribe: así abrirlo no espera a recolocar la colección entera.
+        if emojiPanel != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self, self.mode != .emoji else { return }
+                self.emojiPanel?.reloadCurrent()
+            }
+        }
     }
 
     private func showPanel(_ v: AnyView) {
@@ -2194,6 +2224,10 @@ final class KeyboardViewController: UIInputViewController {
     private var clipContainer: ModelContainer?
     private var allSnapshots: [ClipSnapshot] = []
     private var snapshotsAt = Date.distantPast
+    private var snapshotRefreshQueued = false
+    /// Texto de búsqueda ya plegado, por elemento: plegar las tildes de 60
+    /// textos largos era lo más lento de releer el historial al abrir el panel.
+    private var searchTextCache: [UUID: (updatedAt: Date, sensitive: Bool, text: String)] = [:]
     /// Miniaturas ya hechas (en segundo plano), por elemento.
     private var thumbnails: [UUID: UIImage] = [:]
     private var thumbnailsPending = Set<UUID>()
@@ -2299,8 +2333,20 @@ final class KeyboardViewController: UIInputViewController {
         guard hasFullAccess else { return }
         // El filtro de favoritos y las reaperturas seguidas usan lo que ya está
         // en memoria: no hace falta volver a leer la base.
-        if allSnapshots.isEmpty || Date().timeIntervalSince(snapshotsAt) > 0.8 {
+        if allSnapshots.isEmpty {
             refreshSnapshots()
+        } else if Date().timeIntervalSince(snapshotsAt) > 0.8, !snapshotRefreshQueued {
+            // Con algo ya en memoria el panel se abre con eso y la base se relee
+            // justo después, con el panel ya en pantalla: antes el cambio de
+            // vista esperaba a SwiftData.
+            snapshotRefreshQueued = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self else { return }
+                self.snapshotRefreshQueued = false
+                guard self.mode == .clipboard, !self.searchingClips else { return }
+                self.refreshSnapshots()
+                self.refreshMode()
+            }
         }
     }
 
@@ -2325,9 +2371,17 @@ final class KeyboardViewController: UIInputViewController {
         allSnapshots = items.map { item in
             let isImage = item.type == .image
             if isImage, !item.isSensitive, wanted.count < 24 { wanted.append(item.id) }
+            let searchText: String
+            if let cached = searchTextCache[item.id], cached.updatedAt == item.updatedAt,
+               cached.sensitive == item.isSensitive {
+                searchText = cached.text
+            } else {
+                searchText = Self.searchText(for: item)
+                searchTextCache[item.id] = (item.updatedAt, item.isSensitive, searchText)
+            }
             return ClipSnapshot(id: item.id, typeLabel: item.type.label, systemImage: item.type.systemImage,
                                 preview: item.displayTitle, insertable: insertableText(for: item),
-                                searchText: Self.searchText(for: item),
+                                searchText: searchText,
                                 isImage: isImage, thumbnail: thumbnails[item.id],
                                 isSensitive: item.isSensitive, isFavorite: item.isFavorite)
         }
@@ -2401,6 +2455,7 @@ final class KeyboardViewController: UIInputViewController {
         if mode != .clipboard {
             allSnapshots = []
             thumbnails = [:]
+            searchTextCache = [:]
         }
     }
 
