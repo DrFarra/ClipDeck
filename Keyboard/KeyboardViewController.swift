@@ -475,8 +475,9 @@ final class KeyboardViewController: UIInputViewController {
 
         // Campo nuevo: lo elegido en el anterior deja de valer, y lo que
         // estuviera pendiente (una corrección, sugerencias) no debe caer en él.
-        let documentID = currentDocumentID()
-        if documentID != lastDocumentID {
+        // Un nil pasajero (entre campos) no cuenta como campo nuevo: sólo el
+        // paso de un identificador a otro.
+        if let documentID = currentDocumentID(), documentID != lastDocumentID {
             lastDocumentID = documentID
             documentEpoch += 1
             suggestionWork?.cancel()
@@ -1334,6 +1335,9 @@ final class KeyboardViewController: UIInputViewController {
     func beginSwipe(startChar: String, from point: CGPoint) {
         guard !swipeActive, swipeEnabled else { return }
         wordTouches.removeAll(keepingCapacity: true)
+        // La letra del arranque la consume el trazo: si luego se borra no es
+        // una «letra corregida» y no debe enseñar nada al modelo de toque.
+        lastTypedLetter = nil
         swipeActive = true
         swipeStartChar = startChar
         deleteBack()
