@@ -100,8 +100,7 @@ struct KeySpec {
     var kind: KeyKind
     var widthFactor: CGFloat = 1
     var variants: [String] = []
-    /// Tecla de acción (Buscar, Enviar, Ir…): el nombre va en seminegrita y,
-    /// si el tema lo pide, la tecla en su color de acento.
+    /// Tecla de acción (Buscar, Enviar, Ir…): el nombre va en seminegrita.
     var accent: Bool = false
 }
 
@@ -2702,7 +2701,10 @@ final class KeyView: UIView {
             } else {
                 label.text = spec.value
                 label.font = .systemFont(ofSize: 16, weight: spec.accent ? .semibold : .regular)
-                if spec.accent && theme.accentReturn { label.textColor = theme.accentText }
+            }
+            if theme.accentReturn {
+                label.textColor = theme.accentText
+                icon.tintColor = theme.accentText
             }
         case .space:
             label.text = "espacio"
@@ -2812,7 +2814,7 @@ final class KeyView: UIView {
         switch spec.kind {
         case .char, .space:
             return pressed ? theme.letterPressed : theme.letter
-        case .ret where spec.accent && theme.accentReturn:
+        case .ret where theme.accentReturn:
             return pressed ? theme.accent.withAlphaComponent(0.7) : theme.accent
         case .shift where shiftActive && !pressed:
             return theme.shiftOn

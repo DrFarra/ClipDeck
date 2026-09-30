@@ -53,7 +53,8 @@ struct KeyboardTheme: Identifiable {
     /// Globos de acentos y de tonos de piel, avisos.
     let menu: UIColor
 
-    /// Retorno con nombre (Buscar, Enviar…) en el color de acento.
+    /// Tecla de retorno en el color de acento, siempre: también con el ↵ de
+    /// los campos normales, no sólo con Buscar, Enviar… (como en la vista previa).
     var accentReturn = false
     var keyShadow: UIColor? = nil
     var keyBorder: UIColor? = nil
