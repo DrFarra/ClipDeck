@@ -352,6 +352,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func hostWillEnterForeground() {
+        captureIfCopied()
         guard reloadConfig() else { return }
         applyInputTraits()
         if mode == .keys { showKeyboard() }
@@ -364,6 +365,7 @@ final class KeyboardViewController: UIInputViewController {
         // si la apertura tarda demasiado, la app anfitriona lo cierra.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             self?.prewarmEmojiPanel()
+            self?.startAutoCapture()
         }
     }
 
@@ -405,6 +407,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        stopAutoCapture()
         if searchingClips { endClipSearch(showResults: false) }
         // Guardar lo aprendido antes de que el sistema descargue el teclado.
         WordLearner.flush()
@@ -1951,11 +1954,20 @@ final class KeyboardViewController: UIInputViewController {
     private var pasteSeenAt: CFTimeInterval = 0
     private var pasteKind: PasteChipView.Kind?
 
+    /// Lo último que ya se pegó con el chip o que copió el propio teclado: no
+    /// se vuelve a ofrecer. Va aparte del registro de capturas, que ahora se
+    /// pone al día en cuanto se copia algo y escondía el chip al instante.
+    private static let pasteChipUsedKey = "kb.pasteChipUsedCount"
+
+    private func markPasteChipUsed() {
+        KbPrefs.store.set(UIPasteboard.general.changeCount, forKey: Self.pasteChipUsedKey)
+    }
+
     private func recentPasteKind() -> PasteChipView.Kind? {
         guard hasFullAccess, numPad == nil else { return nil }
         let pasteboard = UIPasteboard.general
         let count = pasteboard.changeCount
-        guard count != AppGroup.sharedDefaults.integer(forKey: SettingsKeys.lastPasteboardChange) else { return nil }
+        guard count != KbPrefs.store.integer(forKey: Self.pasteChipUsedKey) else { return nil }
         if count != pasteSeenCount {
             pasteSeenCount = count
             pasteSeenAt = CACurrentMediaTime()
@@ -1986,11 +1998,58 @@ final class KeyboardViewController: UIInputViewController {
                 CaptureService.captureIfNeeded(context: ModelContext(container), lightweight: true)
             }
             AppGroup.sharedDefaults.set(UIPasteboard.general.changeCount, forKey: SettingsKeys.lastPasteboardChange)
-            allSnapshots = []
+            markPasteChipUsed()
+            snapshotsAt = .distantPast
             pasteChip.isHidden = true
             showHint(Self.pasteImageHint, duration: 4)
             scheduleSuggestions()
         }
+    }
+
+    // MARK: Guardar lo copiado sin abrir el panel
+    //
+    // iOS no deja a ninguna app vigilar el portapapeles en segundo plano: sólo
+    // se puede leer con la app o el teclado en pantalla. El teclado lo mira al
+    // aparecer, al volver la app a primer plano y cada dos segundos mientras
+    // está abierto; `changeCount` no lee nada ni hace preguntar a iOS. Si hay
+    // algo nuevo, lo guarda en el historial. Antes sólo se guardaba al abrir el
+    // panel del portapapeles.
+
+    private var captureTimer: Timer?
+
+    private func startAutoCapture() {
+        stopAutoCapture()
+        guard hasFullAccess else { return }
+        let timer = Timer(timeInterval: 2, target: self, selector: #selector(autoCaptureTick),
+                          userInfo: nil, repeats: true)
+        RunLoop.main.add(timer, forMode: .common)
+        captureTimer = timer
+        captureIfCopied()
+    }
+
+    private func stopAutoCapture() {
+        captureTimer?.invalidate()
+        captureTimer = nil
+    }
+
+    @objc private func autoCaptureTick() { captureIfCopied() }
+
+    private func captureIfCopied() {
+        // Sólo con el teclado en pantalla: leer el portapapeles puede hacer que
+        // iOS pregunte «¿Permitir pegar?», y no debe salir con el teclado oculto.
+        guard config.autoCapture, hasFullAccess, view.window != nil else { return }
+        let count = UIPasteboard.general.changeCount
+        guard count != AppGroup.sharedDefaults.integer(forKey: SettingsKeys.lastPasteboardChange) else { return }
+        // La base se abre en segundo plano al cargar el teclado: si aún no está,
+        // lo recoge la siguiente vuelta.
+        guard let container = clipContainer else { return }
+        switch CaptureService.captureIfNeeded(context: ModelContext(container), lightweight: true) {
+        case .saved, .duplicate:
+            snapshotsAt = .distantPast          // el panel lo relee al abrirse
+        case .ignored, .empty:
+            break
+        }
+        if mode == .keys, !searchingClips { scheduleSuggestions() }
     }
 
     /// iOS no deja a los teclados de terceros escribir imágenes ni archivos,
@@ -2010,7 +2069,8 @@ final class KeyboardViewController: UIInputViewController {
             CaptureService.saveText(text, context: ModelContext(container), lightweight: true)
         }
         AppGroup.sharedDefaults.set(pasteboard.changeCount, forKey: SettingsKeys.lastPasteboardChange)
-        allSnapshots = []
+        markPasteChipUsed()
+        snapshotsAt = .distantPast
         pendingRevert = nil
         justSwiped = nil
         updateShiftFromContext()
@@ -2326,8 +2386,9 @@ final class KeyboardViewController: UIInputViewController {
             provider.suggestedName = (name as NSString).deletingPathExtension
             UIPasteboard.general.setItemProviders([provider], localOnly: false, expirationDate: nil)
         }
-        // Que no vuelva a entrar al historial como captura nueva.
+        // Que no vuelva a entrar al historial como captura nueva ni la ofrezca el chip.
         AppGroup.sharedDefaults.set(UIPasteboard.general.changeCount, forKey: SettingsKeys.lastPasteboardChange)
+        markPasteChipUsed()
         let what = isImage ? "Imagen copiada" : "Archivo copiado"
         showHint("\(what). iOS no deja a los teclados pegarlo: mantén pulsado el campo de texto y toca «Pegar».",
                  duration: 4)

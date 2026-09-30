@@ -183,7 +183,10 @@ struct KeyboardSettingsView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         Section("Pegar desde el teclado") {
-            Text("Cuando copias algo, la barra de sugerencias ofrece «📋 Pegar» durante un par de minutos. Para que iOS no pregunte «¿Permitir pegar?» cada vez: Ajustes → ClipDeck → Pegar desde otras apps → Permitir.")
+            Toggle("Guardar automáticamente lo que copias", isOn: $config.autoCapture)
+            Text("El teclado guarda en el historial lo que copias en cuanto aparece y, mientras está abierto, cada pocos segundos, sin abrir el portapapeles. iOS no deja a ninguna app leer el portapapeles en segundo plano: lo que copies con el teclado cerrado se guarda la próxima vez que lo abras o que abras ClipDeck.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Cuando copias algo, la barra de sugerencias ofrece pegarlo durante un par de minutos. Para que iOS no pregunte «¿Permitir pegar?» cada vez: Ajustes → ClipDeck → Pegar desde otras apps → Permitir.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -248,5 +251,6 @@ struct KeyboardSettingsView: View {
         store.set(config.punctRight, forKey: KbPrefs.punctRight)
         store.set(config.undoCorrectOnDelete, forKey: KbPrefs.undoCorrectOnDelete)
         store.set(config.theme, forKey: KbPrefs.theme)
+        store.set(config.autoCapture, forKey: KbPrefs.autoCapture)
     }
 }
