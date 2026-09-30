@@ -16,11 +16,11 @@ extension UIInputView: UIInputViewAudioFeedback {
 
 // MARK: - Contenedor raíz
 //
-// Una vista normal y transparente: el fondo del teclado lo pinta el sistema
-// (en iOS 26, el cristal redondeado). Antes era un UIInputView con estilo de
-// teclado, que ponía un segundo fondo encima del del sistema.
+// Un UIInputView con estilo de teclado: pinta el fondo gris de siempre de
+// ClipDeck, también dentro del cristal redondeado de iOS 26. Se probó a dejarlo
+// transparente y se volvió a este; los colores de `KeyStyle` son para él.
 
-final class FeedbackHostView: UIView {
+final class FeedbackHostView: UIInputView {
 
     /// Zonas que se quedan el toque pase lo que pase por encima.
     ///
@@ -49,7 +49,7 @@ struct KeySpec {
     var kind: KeyKind
     var widthFactor: CGFloat = 1
     var variants: [String] = []
-    /// Tecla de acción destacada en azul (Buscar, Enviar, Ir…), como en iOS.
+    /// Tecla de acción (Buscar, Enviar, Ir…): el nombre va en seminegrita.
     var accent: Bool = false
 }
 
@@ -189,13 +189,8 @@ final class KeyboardViewController: UIInputViewController {
             }
         }
 
-        // Fondo transparente: el fondo del teclado ya lo pinta el sistema. Uno
-        // propio encima se veía como una caja gris dentro del contenedor
-        // redondeado de iOS 26.
-        view.backgroundColor = .clear
         inputView?.allowsSelfSizing = true
-        root = FeedbackHostView(frame: view.bounds)
-        root.backgroundColor = .clear
+        root = FeedbackHostView(frame: view.bounds, inputViewStyle: .keyboard)
         root.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(root)
         NSLayoutConstraint.activate([
@@ -2335,25 +2330,17 @@ final class KeyAreaView: UIView {
 
 // MARK: - Colores de tecla
 //
-// Los del teclado del sistema. Antes las teclas de función (mayúsculas,
-// borrar, 123, retorno, coma y punto) usaban `systemGray4`, casi el mismo gris
-// que el fondo del teclado en modo claro: se veía el símbolo pero no la
-// tecla. Y en modo oscuro las letras quedaban más oscuras que el fondo.
+// Los de siempre de ClipDeck: teclas planas, sin sombra, sobre el fondo de
+// teclado de `FeedbackHostView`. Se probó a copiar los del teclado del sistema
+// (letras blancas con sombra, retorno en azul) y se volvió a estos.
 
 enum KeyStyle {
-    static let letter = UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(white: 0.42, alpha: 1) : .white }
-    static let function = UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(white: 0.27, alpha: 1) : UIColor(red: 0.67, green: 0.70, blue: 0.73, alpha: 1) }
-    static let letterPressed = function
-    static let functionPressed = letter
-    static let accent = UIColor.systemBlue
-    static let accentPressed = UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor.systemBlue.withAlphaComponent(0.6) : UIColor.systemBlue.withAlphaComponent(0.7) }
-    static let shadow = UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(white: 0, alpha: 0.4) : UIColor(red: 0.53, green: 0.54, blue: 0.56, alpha: 1) }
-    static let popup = UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(white: 0.42, alpha: 1) : .white }
+    static let letter: UIColor = .secondarySystemBackground
+    static let function: UIColor = .systemGray4
+    static let pressed: UIColor = .systemGray2
+    static let shiftOn: UIColor = .systemGray
+    static let popup: UIColor = .systemGray3
+    static let accentBar: UIColor = .systemGray4
 }
 
 // MARK: - Fila de teclas (UIKit)
@@ -2457,9 +2444,6 @@ final class KeyView: UIView {
         super.init(frame: .zero)
 
         layer.cornerRadius = 8
-        layer.shadowOffset = CGSize(width: 0, height: 1)
-        layer.shadowRadius = 0
-        layer.shadowOpacity = 1
         clipsToBounds = false
         isMultipleTouchEnabled = true
         isExclusiveTouch = false
@@ -2485,14 +2469,12 @@ final class KeyView: UIView {
             } else {
                 label.text = spec.value
                 label.font = .systemFont(ofSize: 16, weight: spec.accent ? .semibold : .regular)
-                if spec.accent { label.textColor = .white }
             }
         case .space:     label.text = "espacio"; label.textColor = .secondaryLabel; label.font = .systemFont(ofSize: 15)
         case .mode:      label.text = spec.value; label.font = .systemFont(ofSize: 16)
         default:         label.text = spec.value
         }
         backgroundColor = baseColor(pressed: false)
-        layer.shadowColor = KeyStyle.shadow.resolvedColor(with: traitCollection).cgColor
 
         // El globo pasa todos sus toques al sistema: un toque cambia de
         // teclado y una pulsación larga muestra la lista, como en iOS.
@@ -2528,12 +2510,6 @@ final class KeyView: UIView {
         label.frame = bounds.insetBy(dx: 2, dy: 0)
         icon.frame = bounds
         globeButton?.frame = bounds
-        layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: layer.cornerRadius).cgPath
-    }
-
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        layer.shadowColor = KeyStyle.shadow.resolvedColor(with: traitCollection).cgColor
     }
 
     @objc private func globeDown() {
@@ -2568,8 +2544,8 @@ final class KeyView: UIView {
         guard spec.kind == .shift else { return }
         shiftActive = active
         setIcon([caps ? "capslock.fill" : (active ? "shift.fill" : "shift")], fallback: caps ? "⇪" : "⇧")
-        icon.tintColor = active ? .black : .label
-        label.textColor = active ? .black : .label
+        icon.tintColor = active ? .white : .label
+        label.textColor = active ? .white : .label
         backgroundColor = baseColor(pressed: false)
     }
 
@@ -2578,15 +2554,14 @@ final class KeyView: UIView {
     }
 
     private func baseColor(pressed: Bool) -> UIColor {
+        if pressed { return KeyStyle.pressed }
         switch spec.kind {
         case .char, .space:
-            return pressed ? KeyStyle.letterPressed : KeyStyle.letter
-        case .ret where spec.accent:
-            return pressed ? KeyStyle.accentPressed : KeyStyle.accent
+            return KeyStyle.letter
         case .shift where shiftActive:
-            return .white
+            return KeyStyle.shiftOn
         default:
-            return pressed ? KeyStyle.functionPressed : KeyStyle.function
+            return KeyStyle.function
         }
     }
 
@@ -2838,12 +2813,8 @@ final class KeyView: UIView {
         var x = accentRTL ? kf.midX + cellW / 2 + 4 - w : kf.midX - cellW / 2 - 4
         x = min(max(x, 3), root.bounds.width - w - 3)
         let bar = UIView(frame: CGRect(x: x, y: max(kf.minY - hgt - 6, 2), width: w, height: hgt))
-        bar.backgroundColor = KeyStyle.popup
+        bar.backgroundColor = KeyStyle.accentBar
         bar.layer.cornerRadius = 10
-        bar.layer.shadowColor = UIColor.black.cgColor
-        bar.layer.shadowOpacity = 0.25
-        bar.layer.shadowRadius = 4
-        bar.layer.shadowOffset = CGSize(width: 0, height: 1)
         root.addSubview(bar)
         // Mayúscula si lo que se escribió al apoyar ya lo era (la tecla ya
         // vuelve a minúscula después de la primera letra de la frase).
