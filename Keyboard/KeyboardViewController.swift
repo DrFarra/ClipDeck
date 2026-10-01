@@ -16,11 +16,35 @@ extension UIInputView: UIInputViewAudioFeedback {
 
 // MARK: - Contenedor raíz
 //
-// Una vista normal y transparente: el fondo del teclado lo pinta el sistema
-// (en iOS 26, el cristal redondeado). Antes era un UIInputView con estilo de
-// teclado, que ponía un segundo fondo encima del del sistema.
+// Una vista normal: el fondo lo pone el tema con `applyBackdrop`. El del tema
+// Clásico es el gris de teclado de siempre, un UIInputView con estilo
+// `.keyboard` por debajo de todo; Cristal no pone nada y deja ver el del
+// sistema (el cristal redondeado de iOS 26); los demás pintan su color.
 
 final class FeedbackHostView: UIView {
+    private var backdropView: UIView?
+
+    func applyBackdrop(_ backdrop: KeyboardTheme.Backdrop) {
+        backdropView?.removeFromSuperview()
+        backdropView = nil
+        let view: UIView
+        switch backdrop {
+        case .clear:
+            return
+        case .keyboard:
+            view = UIInputView(frame: bounds, inputViewStyle: .keyboard)
+        case .solid(let color):
+            view = UIView(frame: bounds)
+            view.backgroundColor = color
+        case .gradient(let top, let bottom):
+            view = GradientBackdropView(top: top, bottom: bottom)
+        }
+        view.frame = bounds
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.isUserInteractionEnabled = false
+        insertSubview(view, at: 0)
+        backdropView = view
+    }
 
     /// Zonas que se quedan el toque pase lo que pase por encima.
     ///
@@ -40,6 +64,33 @@ final class FeedbackHostView: UIView {
     }
 }
 
+/// Fondo en degradado vertical (temas Medianoche, Océano, Lavanda).
+final class GradientBackdropView: UIView {
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+
+    private let top: UIColor
+    private let bottom: UIColor
+
+    init(top: UIColor, bottom: UIColor) {
+        self.top = top
+        self.bottom = bottom
+        super.init(frame: .zero)
+        updateColors()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        updateColors()
+    }
+
+    private func updateColors() {
+        guard let gradient = layer as? CAGradientLayer else { return }
+        gradient.colors = [top.resolvedColor(with: traitCollection).cgColor,
+                           bottom.resolvedColor(with: traitCollection).cgColor]
+    }
+}
+
 // MARK: - Especificación de tecla
 
 enum KeyKind { case char, shift, backspace, mode, globe, space, ret, comma, period }
@@ -49,7 +100,7 @@ struct KeySpec {
     var kind: KeyKind
     var widthFactor: CGFloat = 1
     var variants: [String] = []
-    /// Tecla de acción destacada en azul (Buscar, Enviar, Ir…), como en iOS.
+    /// Tecla de acción (Buscar, Enviar, Ir…): el nombre va en seminegrita.
     var accent: Bool = false
 }
 
@@ -110,12 +161,16 @@ final class KeyboardViewController: UIInputViewController {
     private var suggestionWork: DispatchWorkItem?
     private var heightConstraint: NSLayoutConstraint?
 
-    // Búsqueda en el portapapeles: mientras se escribe la consulta, las teclas
-    // escriben en ella y no en la app (una extensión de teclado no puede
-    // abrir un teclado para sus propios campos de texto).
-    private var searchingClips = false
+    // Búsqueda en el portapapeles o de emojis: mientras se escribe la
+    // consulta, las teclas escriben en ella y no en la app (una extensión de
+    // teclado no puede abrir un teclado para sus propios campos de texto).
+    private enum SearchTarget { case clips, emoji }
+    private var searchTarget: SearchTarget?
+    private var searching: Bool { searchTarget != nil }
     private var clipQuery = ""
-    private let searchField = ClipSearchFieldView()
+    private var emojiQuery = ""
+    private let searchField = SearchFieldView()
+    private let emojiResults = EmojiResultsView()
 
     // Escritura deslizando
     private var swipeActive = false
@@ -145,6 +200,7 @@ final class KeyboardViewController: UIInputViewController {
     // UI
     private var root: FeedbackHostView!
     private let topBar = TopBarView()
+    private let pasteChip = PasteChipView()
     private let clipboardButton = IconTouchButton()
     private let emojiButton = IconTouchButton()
     private var suggestionButtons: [SuggestionButton] = []
@@ -165,7 +221,9 @@ final class KeyboardViewController: UIInputViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         config = KbPrefs.Config.load()
+        KeyStyle.theme = KeyboardTheme.named(config.theme)
         haptic.prepare()
+        setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
 
         requestSupplementaryLexicon { [weak self] lex in
             var words: [String] = []
@@ -189,13 +247,10 @@ final class KeyboardViewController: UIInputViewController {
             }
         }
 
-        // Fondo transparente: el fondo del teclado ya lo pinta el sistema. Uno
-        // propio encima se veía como una caja gris dentro del contenedor
-        // redondeado de iOS 26.
+        // El fondo lo pone el tema (ver `FeedbackHostView`).
         view.backgroundColor = .clear
         inputView?.allowsSelfSizing = true
         root = FeedbackHostView(frame: view.bounds)
-        root.backgroundColor = .clear
         root.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(root)
         NSLayoutConstraint.activate([
@@ -214,23 +269,28 @@ final class KeyboardViewController: UIInputViewController {
 
         setupTopBar()
 
+        emojiResults.isHidden = true
+        emojiResults.insert = { [weak self] e in self?.insertEmoji(e) }
+        root.addSubview(emojiResults)
+
         keyboardArea.clipsToBounds = false
         keyboardArea.isMultipleTouchEnabled = true
         root.addSubview(keyboardArea)
 
         popup.textAlignment = .center
         popup.font = .systemFont(ofSize: CGFloat(config.fontSize) + 12, weight: .medium)
-        popup.backgroundColor = KeyStyle.popup
         popup.layer.cornerRadius = 9
         popup.layer.masksToBounds = true
         popup.isHidden = true
         popup.isUserInteractionEnabled = false
         root.addSubview(popup)
 
+        applyTheme()
         rebuildKeys()
         precomputeChecker()
         prewarmClipboard()
         prepareSwipe()
+        observeHostForeground()
     }
 
     /// Carga el vocabulario de deslizamiento en segundo plano: leerlo en el
@@ -266,21 +326,43 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        // Recarga preferencias por si cambiaron en la app.
-        let newConfig = KbPrefs.Config.load()
-        let changed = newConfig != config
-        config = newConfig
-        updateHeight()
-        if changed {
-            popup.font = .systemFont(ofSize: CGFloat(config.fontSize) + 12, weight: .medium)
-            rebuildKeys()
-        } else {
-            updateKeyCaps()
-        }
+        setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
+        if !reloadConfig() { updateKeyCaps() }
         applyInputTraits()
         updateShiftFromContext()
         noteOwnEdit()
         haptic.prepare()
+        if mode == .keys { showKeyboard() }
+    }
+
+    /// Recarga las preferencias por si cambiaron en la app y, si cambiaron,
+    /// aplica el tema y rehace las teclas. Devuelve si hubo cambios.
+    @discardableResult
+    private func reloadConfig() -> Bool {
+        let newConfig = KbPrefs.Config.load()
+        let changed = newConfig != config
+        config = newConfig
+        updateHeight()
+        guard changed else { return false }
+        KeyStyle.theme = KeyboardTheme.named(config.theme)
+        applyTheme()
+        popup.font = .systemFont(ofSize: CGFloat(config.fontSize) + 12, weight: .medium)
+        rebuildKeys()
+        return true
+    }
+
+    /// Volver a una app que ya tenía el teclado abierto no siempre pasa por
+    /// `viewWillAppear`: el teclado seguía con el tema y los ajustes de antes
+    /// de ir a cambiarlos en ClipDeck.
+    private func observeHostForeground() {
+        NotificationCenter.default.addObserver(self, selector: #selector(hostWillEnterForeground),
+                                               name: .NSExtensionHostWillEnterForeground, object: nil)
+    }
+
+    @objc private func hostWillEnterForeground() {
+        captureIfCopied()
+        guard reloadConfig() else { return }
+        applyInputTraits()
         if mode == .keys { showKeyboard() }
     }
 
@@ -291,6 +373,7 @@ final class KeyboardViewController: UIInputViewController {
         // si la apertura tarda demasiado, la app anfitriona lo cierra.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             self?.prewarmEmojiPanel()
+            self?.startCaptureTimer()
         }
     }
 
@@ -300,19 +383,40 @@ final class KeyboardViewController: UIInputViewController {
     /// el «123» respondían tarde o se perdían al teclear rápido. Cuelgan de la
     /// ventana o de alguna vista intermedia, así que se recorre toda la cadena
     /// y se repite cuando cambia la jerarquía.
+    ///
+    /// No basta con el principio del toque. Retenían también el final (los
+    /// iconos de portapapeles y emojis actúan al levantar el dedo, y cambiaban
+    /// de vista con retraso) y cancelaban los toques cuando un deslizamiento
+    /// rápido les parecía un gesto de borde: en el panel de emojis, un
+    /// deslizamiento rápido no desplazaba nada. Es la receta que funcionó en
+    /// los foros de desarrolladores de Apple (hilo 654645): pedir los bordes
+    /// al sistema, quitar las tres esperas y apagar los gestos de borde.
     private func releaseEdgeTouches() {
+        var views: [UIView] = []
         var current: UIView? = view
         while let v = current {
-            for recognizer in v.gestureRecognizers ?? [] where recognizer.delaysTouchesBegan {
-                recognizer.delaysTouchesBegan = false
-            }
+            views.append(v)
             current = v.superview
+        }
+        if let rootView = view.window?.rootViewController?.view, !views.contains(rootView) {
+            views.append(rootView)
+        }
+        for v in views {
+            for recognizer in v.gestureRecognizers ?? [] {
+                recognizer.delaysTouchesBegan = false
+                recognizer.delaysTouchesEnded = false
+                recognizer.cancelsTouchesInView = false
+                if recognizer is UIScreenEdgePanGestureRecognizer { recognizer.isEnabled = false }
+            }
         }
     }
 
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { [.left, .right] }
+
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        if searchingClips { endClipSearch(showResults: false) }
+        stopCaptureTimer()
+        if searching { endSearch(then: .keys) }
         // Guardar lo aprendido antes de que el sistema descargue el teclado.
         WordLearner.flush()
         TouchModel.flush()
@@ -332,6 +436,7 @@ final class KeyboardViewController: UIInputViewController {
         allSnapshots = []
         thumbnails = [:]
         clipQuery = ""
+        emojiQuery = ""
         if mode == .clipboard { mode = .keys; refreshMode() }
     }
 
@@ -340,7 +445,7 @@ final class KeyboardViewController: UIInputViewController {
         updateHeight()
         // `needsInputModeSwitchKey` no es fiable hasta que el teclado conecta
         // con la app: si cambia, se rehacen las teclas.
-        if !searchingClips, layoutKey() != builtLayoutKey { rebuildKeys() }
+        if !searching, layoutKey() != builtLayoutKey { rebuildKeys() }
     }
 
     override func viewDidLayoutSubviews() {
@@ -360,8 +465,14 @@ final class KeyboardViewController: UIInputViewController {
 
     private func desiredHeight() -> CGFloat {
         let chosen = CGFloat(config.height)
-        guard isCompactHeight else { return chosen }
-        return max(160, min(chosen * 0.62, 215))
+        guard isCompactHeight else { return chosen + emojiResultsHeight }
+        return max(160, min(chosen * 0.62, 215)) + emojiResultsHeight
+    }
+
+    /// La fila de resultados de la búsqueda de emojis se suma a la altura: las
+    /// teclas no encogen mientras se busca.
+    private var emojiResultsHeight: CGFloat {
+        searchTarget == .emoji ? (isCompactHeight ? 38 : 46) : 0
     }
 
     private func updateHeight() {
@@ -374,7 +485,7 @@ final class KeyboardViewController: UIInputViewController {
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
         applyInputTraits()
-        guard !searchingClips else { return }
+        guard !searching else { return }
         let signature = contextSignature()
         // Es el eco de algo que escribimos nosotros: nada que hacer.
         guard signature != ownContext else { return }
@@ -467,11 +578,18 @@ final class KeyboardViewController: UIInputViewController {
     /// apariencia clara u oscura. Sólo rehace las teclas si algo cambió.
     private func applyInputTraits() {
         let proxy = textDocumentProxy
+        let style: UIUserInterfaceStyle
+        switch KeyStyle.theme.appearance {
+        // Los temas claros y oscuros fijan la suya: si no, los textos del
+        // sistema (etiquetas, el panel del portapapeles) no se leerían.
+        case .light: style = .light
+        case .dark: style = .dark
         // Sólo se obedece un «oscuro» explícito: muchas apps dicen «claro» (o
         // un valor viejo) aunque el sistema esté en modo oscuro.
-        let style: UIUserInterfaceStyle = proxy.keyboardAppearance == .dark ? .dark : .unspecified
+        case .system: style = proxy.keyboardAppearance == .dark ? .dark : .unspecified
+        }
         if overrideUserInterfaceStyle != style { overrideUserInterfaceStyle = style }
-        guard !searchingClips else { return }
+        guard !searching else { return }
 
         // Campo nuevo: lo elegido en el anterior deja de valer, y lo que
         // estuviera pendiente (una corrección, sugerencias) no debe caer en él.
@@ -511,7 +629,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func punctuationKeys() -> (left: String, right: String) {
-        if searchingClips { return (config.punctLeft, config.punctRight) }
+        if searching { return (config.punctLeft, config.punctRight) }
         switch textDocumentProxy.keyboardType ?? .default {
         case .emailAddress: return ("@", ".")
         case .URL: return ("/", ".")
@@ -522,7 +640,11 @@ final class KeyboardViewController: UIInputViewController {
 
     /// Nombre de la tecla de retorno según el campo ("" = ↵ normal).
     private func returnKeyStyle() -> (title: String, accent: Bool) {
-        if searchingClips { return ("Buscar", true) }
+        switch searchTarget {
+        case .clips: return ("Buscar", true)
+        case .emoji: return ("OK", true)
+        case nil: break
+        }
         switch textDocumentProxy.returnKeyType ?? .default {
         case .go: return ("Ir", true)
         case .google, .search, .yahoo: return ("Buscar", true)
@@ -535,6 +657,26 @@ final class KeyboardViewController: UIInputViewController {
         case .continue: return ("Continuar", true)
         default: return ("", false)
         }
+    }
+
+    // MARK: Tema
+
+    /// Pinta lo que no se rehace con las teclas: el fondo, la barra superior,
+    /// el globo de la tecla y los paneles. Las teclas toman el tema al
+    /// construirse (`rebuildKeys`), y la apariencia clara u oscura la fija
+    /// `applyInputTraits`.
+    private func applyTheme() {
+        let theme = KeyStyle.theme
+        root.applyBackdrop(theme.backdrop)
+        popup.backgroundColor = theme.popup
+        popup.textColor = theme.text
+        separatorViews.forEach { $0.backgroundColor = theme.separator }
+        suggestionButtons.forEach { $0.applyTheme() }
+        pasteChip.applyTheme()
+        searchField.applyTheme()
+        emojiResults.applyTheme()
+        emojiPanel?.applyTheme()
+        updateTopIcons()
     }
 
     // MARK: Barra superior
@@ -563,19 +705,22 @@ final class KeyboardViewController: UIInputViewController {
             suggestionButtons.append(b)
             if i > 0 {
                 let sep = UIView()
-                sep.backgroundColor = .separator
                 topBar.addSubview(sep)
                 separatorViews.append(sep)
             }
         }
 
+        pasteChip.onTap = { [weak self] kind in self?.pasteChipTapped(kind) }
+        topBar.addSubview(pasteChip)
+
         searchField.isHidden = true
         searchField.onClear = { [weak self] in
             guard let self else { return }
             self.keyFeedback()
-            self.clipQuery = ""
+            self.activeQuery = ""
             self.updateSearchField()
         }
+        searchField.onTap = { [weak self] in self?.beginEmojiSearch() }
         topBar.addSubview(searchField)
     }
 
@@ -741,10 +886,16 @@ final class KeyboardViewController: UIInputViewController {
         for (i, sep) in separatorViews.enumerated() {
             sep.frame = CGRect(x: sugX + CGFloat(i + 1) * sugW - 0.5, y: topH / 2 - 10, width: 1, height: 20)
         }
-        searchField.frame = CGRect(x: sugX, y: 4, width: max(W - sugX - edge, 0), height: topH - 8)
+        pasteChip.frame = CGRect(x: sugX, y: 0, width: sugTotal, height: topH)
+        // Mientras se escribe ocupa también el sitio del icono de emojis; en el
+        // panel de emojis, sin escribir, es la lupa entre los dos iconos.
+        let fieldRight = searching ? W - edge : emojiButton.frame.minX - 6
+        searchField.frame = CGRect(x: sugX, y: 4, width: max(fieldRight - sugX, 0), height: topH - 8)
 
-        let areaY = topH
-        let areaH = H - topH
+        let resultsH = emojiResultsHeight
+        emojiResults.frame = CGRect(x: 0, y: topH, width: W, height: resultsH)
+        let areaY = topH + resultsH
+        let areaH = H - areaY
         keyboardArea.frame = CGRect(x: 0, y: areaY, width: W, height: areaH)
         // Al girar el iPhone las teclas cambian de sitio: los centros guardados
         // para el deslizamiento y el modelo de toque ya no valen.
@@ -801,28 +952,30 @@ final class KeyboardViewController: UIInputViewController {
         let l = UILabel()
         l.font = .systemFont(ofSize: 13, weight: .medium)
         l.textAlignment = .center
-        l.textColor = .label
-        l.backgroundColor = UIColor.systemGray4
         l.layer.cornerRadius = 12
         l.layer.masksToBounds = true
-        l.numberOfLines = 1
+        l.numberOfLines = 0
         l.isHidden = true
         l.isUserInteractionEnabled = false
         return l
     }()
 
-    /// Aviso breve centrado (p. ej. al olvidar una sugerencia).
-    func showHint(_ text: String) {
+    /// Aviso breve centrado (p. ej. al olvidar una sugerencia). Los largos
+    /// (cómo pegar una imagen) ocupan dos líneas y duran más.
+    func showHint(_ text: String, duration: TimeInterval = 1.6) {
         if hintLabel.superview == nil { root.addSubview(hintLabel) }
-        hintLabel.text = "  \(text)  "
-        hintLabel.sizeToFit()
-        let w = min(hintLabel.bounds.width + 16, root.bounds.width - 16)
-        let h: CGFloat = 30
-        hintLabel.frame = CGRect(x: (root.bounds.width - w) / 2, y: topBar.frame.maxY, width: w, height: h)
+        hintLabel.text = text
+        hintLabel.textColor = KeyStyle.theme.text
+        hintLabel.backgroundColor = KeyStyle.theme.menu
+        let maxW = max(root.bounds.width - 24, 40)
+        let fitted = hintLabel.sizeThatFits(CGSize(width: maxW - 24, height: .greatestFiniteMagnitude))
+        let w = min(fitted.width + 24, maxW)
+        let h = max(fitted.height + 12, 30)
+        hintLabel.frame = CGRect(x: (root.bounds.width - w) / 2, y: topBar.frame.maxY + 2, width: w, height: h)
         hintLabel.isHidden = false
         root.bringSubviewToFront(hintLabel)
         NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(hideHint), object: nil)
-        perform(#selector(hideHint), with: nil, afterDelay: 1.6)
+        perform(#selector(hideHint), with: nil, afterDelay: duration)
     }
 
     @objc private func hideHint() { hintLabel.isHidden = true }
@@ -886,19 +1039,19 @@ final class KeyboardViewController: UIInputViewController {
         // Los signos que cierran palabra desde la capa de símbolos pasan por
         // el mismo camino que la coma y el punto: corrigen y aprenden la
         // palabra anterior («que tal?» corregía «tal» sólo con el punto).
-        if symbolsMode, numPad == nil, !searchingClips, Self.closingPunctuation.contains(base) {
+        if symbolsMode, numPad == nil, !searching, Self.closingPunctuation.contains(base) {
             punctTap(base)
             return base
         }
         keyFeedback()
         autoSpaceInserted = false
         var value = base
-        if let point, numPad == nil, !searchingClips, base.count == 1, base.first?.isLetter == true, !symbolsMode {
+        if let point, numPad == nil, !searching, base.count == 1, base.first?.isLetter == true, !symbolsMode {
             value = resolveLetter(base, at: point)
         }
         let upper = shift != .off && !symbolsMode
         let out = upper ? value.uppercased() : value
-        if searchingClips {
+        if searching {
             appendToQuery(out)
         } else {
             put(out)
@@ -908,13 +1061,13 @@ final class KeyboardViewController: UIInputViewController {
         }
         if shift == .on && !symbolsMode {
             // En los campos «todo en mayúsculas» la mayúscula se queda puesta.
-            shift = (!searchingClips && textDocumentProxy.autocapitalizationType == .allCharacters
+            shift = (!searching && textDocumentProxy.autocapitalizationType == .allCharacters
                      && config.autoCapital && !fieldIsLiteral) ? .on : .off
             shiftByUser = false
             updateKeyCaps()
         }
         pendingRevert = nil
-        if !searchingClips { scheduleSuggestions() }
+        if !searching { scheduleSuggestions() }
         return out
     }
 
@@ -995,8 +1148,8 @@ final class KeyboardViewController: UIInputViewController {
 
     /// Reemplaza el último carácter insertado por una variante acentuada.
     func replaceLastWithVariant(_ variant: String) {
-        if searchingClips {
-            if !clipQuery.isEmpty { clipQuery.removeLast() }
+        if searching {
+            if !activeQuery.isEmpty { activeQuery.removeLast() }
             appendToQuery(variant)
             return
         }
@@ -1038,8 +1191,8 @@ final class KeyboardViewController: UIInputViewController {
         deleteTimer?.invalidate()
         deleteTimer = Self.commonTimer(0.45) { [weak self] in self?.scheduleNextDelete() }
 
-        if searchingClips {
-            if !clipQuery.isEmpty { clipQuery.removeLast(); updateSearchField() }
+        if searching {
+            deleteFromQuery()
             return
         }
         // Como en Gboard: borrar justo después de una autocorrección la
@@ -1066,8 +1219,8 @@ final class KeyboardViewController: UIInputViewController {
         let interval: TimeInterval = deleteRepeats < 8 ? 0.11 : (deleteRepeats < 18 ? 0.06 : 0.035)
         deleteTimer = Self.commonTimer(interval) { [weak self] in
             guard let self else { return }
-            if self.searchingClips {
-                if !self.clipQuery.isEmpty { self.clipQuery.removeLast(); self.updateSearchField() }
+            if self.searching {
+                self.deleteFromQuery()
             } else {
                 if self.deleteRepeats > 26 { self.deleteWord() } else { self.deleteBack() }
                 self.wordTouches.removeAll(keepingCapacity: true)
@@ -1088,7 +1241,7 @@ final class KeyboardViewController: UIInputViewController {
         deleteTimer?.invalidate()
         deleteTimer = nil
         deleteRepeats = 0
-        guard !searchingClips else { return }
+        guard !searching else { return }
         updateShiftFromContext()
         scheduleSuggestions()
     }
@@ -1101,7 +1254,7 @@ final class KeyboardViewController: UIInputViewController {
     private var swipeDeleted: [String] = []
 
     func backspaceDrag(steps: Int) {
-        guard !searchingClips else { return }
+        guard !searching else { return }
         if steps > swipeDeleted.count {
             deleteTimer?.invalidate(); deleteTimer = nil
             while steps > swipeDeleted.count {
@@ -1138,13 +1291,13 @@ final class KeyboardViewController: UIInputViewController {
             symbolsMode.toggle()
         }
         rebuildKeys()
-        if numPad == nil && !symbolsMode && !searchingClips { updateShiftFromContext() }
+        if numPad == nil && !symbolsMode && !searching { updateShiftFromContext() }
     }
 
     func switchKeyboard() { advanceToNextInputMode() }
 
     func spaceTap() {
-        if searchingClips { keyFeedback(); appendToQuery(" "); return }
+        if searching { keyFeedback(); appendToQuery(" "); return }
         let now = Date()
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         if config.doubleSpace,
@@ -1195,7 +1348,7 @@ final class KeyboardViewController: UIInputViewController {
     /// Entra en modo trackpad: las teclas se apagan y toda el área del teclado
     /// pasa a mover el cursor, igual que al mantener el espacio en iOS.
     func enterTrackpad(at point: CGPoint) {
-        guard config.trackpad, !trackpadActive, !searchingClips else { return }
+        guard config.trackpad, !trackpadActive, !searching else { return }
         trackpadActive = true
         trackpadMoved = false
         trackpadLastPoint = point
@@ -1208,7 +1361,7 @@ final class KeyboardViewController: UIInputViewController {
         keyViews.forEach { $0.setDimmed(true) }
 
         trackpadOverlay.frame = keyboardArea.frame
-        trackpadOverlay.backgroundColor = UIColor.systemGray4.withAlphaComponent(0.25)
+        trackpadOverlay.backgroundColor = KeyStyle.theme.function.withAlphaComponent(0.25)
         trackpadOverlay.isUserInteractionEnabled = false
         if trackpadOverlay.superview == nil { root.addSubview(trackpadOverlay) }
         trackpadOverlay.isHidden = false
@@ -1218,7 +1371,7 @@ final class KeyboardViewController: UIInputViewController {
             let l = UILabel()
             l.text = "Mueve el cursor"
             l.font = .systemFont(ofSize: 14, weight: .medium)
-            l.textColor = .secondaryLabel
+            l.textColor = KeyStyle.theme.secondaryText
             l.textAlignment = .center
             trackpadOverlay.addSubview(l)
             trackpadHint = l
@@ -1327,7 +1480,7 @@ final class KeyboardViewController: UIInputViewController {
     /// Sólo con el diccionario ya cargado, en el teclado de letras y fuera del
     /// modo trackpad.
     var swipeEnabled: Bool {
-        config.swipe && swipeReady && !symbolsMode && !trackpadActive && numPad == nil && !searchingClips
+        config.swipe && swipeReady && !symbolsMode && !trackpadActive && numPad == nil && !searching
     }
 
     /// Empieza un trazo. La letra que se insertó al tocar la tecla se retira,
@@ -1470,14 +1623,20 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     func returnTap() {
-        if searchingClips { keyFeedback(); endClipSearch(showResults: true); return }
+        if let target = searchTarget {
+            keyFeedback()
+            // «Buscar» enseña lo encontrado en el portapapeles; «OK» deja la
+            // búsqueda de emojis y vuelve a las letras.
+            endSearch(then: target == .clips ? .clipboard : .keys)
+            return
+        }
         commit("\n")
     }
 
     /// `feedback: false` cuando la tecla ya vibró al apoyar el dedo (los
     /// signos con pulsación larga se escriben al soltar).
     func punctTap(_ ch: String, feedback: Bool = true) {
-        if searchingClips {
+        if searching {
             if feedback { keyFeedback() }
             appendToQuery(ch)
             return
@@ -1489,7 +1648,7 @@ final class KeyboardViewController: UIInputViewController {
     /// no gasta la mayúscula de inicio de frase.
     func insertSymbol(_ symbol: String, feedback: Bool = true) {
         if feedback { keyFeedback() }
-        if searchingClips { appendToQuery(symbol); return }
+        if searching { appendToQuery(symbol); return }
         autoSpaceInserted = false
         pendingRevert = nil
         justSwiped = nil
@@ -1589,7 +1748,7 @@ final class KeyboardViewController: UIInputViewController {
     /// escrito después. Antes sólo se aceptaba el separador exacto: un doble
     /// espacio rápido tras una errata dejaba la palabra sin corregir.
     private func applyCorrection(original: String, fixed: String) {
-        guard !searchingClips else { return }
+        guard !searching else { return }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         // Lo escrito tras la palabra: sólo espacios y signos. Si ya empezó
         // otra palabra o movió el cursor, no se toca nada.
@@ -1636,7 +1795,7 @@ final class KeyboardViewController: UIInputViewController {
     /// Decide la mayúscula según lo que pide el campo y el texto previo.
     /// Con `respectManual` no se quita una mayúscula que puso el usuario.
     private func updateShiftFromContext(respectManual: Bool = false) {
-        guard shift != .caps, !searchingClips else { return }
+        guard shift != .caps, !searching else { return }
         if respectManual && shiftByUser && shift == .on { return }
         let newShift: ShiftState = contextWantsCapital() ? .on : .off
         shiftByUser = false
@@ -1670,7 +1829,7 @@ final class KeyboardViewController: UIInputViewController {
     /// Programa el cálculo de sugerencias en segundo plano con debounce, para
     /// que el corrector no bloquee nunca la siguiente pulsación de tecla.
     private func scheduleSuggestions() {
-        guard !searchingClips else { return }
+        guard !searching else { return }
         guard config.prediction, numPad == nil else { setSuggestions([]); return }
         suggestionWork?.cancel()
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
@@ -1682,7 +1841,7 @@ final class KeyboardViewController: UIInputViewController {
                                                                   replacements: shortcuts,
                                                                   capitalizeNext: capNext)
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.mode == .keys, !self.searchingClips else { return }
+                guard let self, self.mode == .keys, !self.searching else { return }
                 self.setSuggestions(result)
             }
         }
@@ -1760,15 +1919,19 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func setSuggestions(_ words: [String]) {
-        guard !searchingClips else { return }
+        guard !searching else { return }
         var titles = words
+        var paste: PasteChipView.Kind?
         if mode == .keys, let revert = validRevert() {
             titles = ["↺ " + revert.original] + Array(words.prefix(2))
-        } else if mode == .keys, currentWord().isEmpty, let chip = pasteChipTitle() {
-            titles = [chip] + Array(words.prefix(2))
+        } else if mode == .keys, currentWord().isEmpty, let kind = recentPasteKind() {
+            // Lo recién copiado ocupa la barra entera: nada de predicciones al lado.
+            paste = kind
+            titles = []
         } else if pasteChipShown, !currentWord().isEmpty {
             dismissPasteChip()
         }
+        if let paste { pasteChip.show(paste) } else { pasteChip.isHidden = true }
         for (i, b) in suggestionButtons.enumerated() {
             b.text = i < titles.count ? titles[i] : ""
         }
@@ -1782,10 +1945,6 @@ final class KeyboardViewController: UIInputViewController {
         wordTouches.removeAll(keepingCapacity: true)
         if title.hasPrefix("↺ ") {
             undoAutocorrect(fromBackspace: false)
-            return
-        }
-        if title == Self.pasteChip {
-            pasteRecent()
             return
         }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
@@ -1808,7 +1967,7 @@ final class KeyboardViewController: UIInputViewController {
     private func confirmForget(_ title: String) {
         var word = title
         if word.hasPrefix("↺ ") { word = String(word.dropFirst(2)) }
-        guard !word.isEmpty, word != Self.pasteChip else { return }
+        guard !word.isEmpty else { return }
         keyFeedback()
         showForgetConfirm(word: word)
     }
@@ -1816,57 +1975,106 @@ final class KeyboardViewController: UIInputViewController {
     // MARK: Pegar lo recién copiado
     //
     // Si se copió algo nuevo, la barra ofrece pegarlo de un toque, como
-    // Gboard. Para saberlo basta lo que iOS deja ver sin avisar (contador y
-    // tipos): no pide «Permitir pegar» hasta que el usuario toca.
+    // Gboard. Para saberlo basta lo que iOS deja ver sin avisar (contador,
+    // tipos y si hay imágenes, enlaces o texto): no pide «Permitir pegar»
+    // hasta que el usuario toca.
+    //
+    // La imagen va primero: una captura o una foto copiadas suelen traer
+    // también un texto (el nombre o la fecha de la captura), y antes el chip
+    // pegaba ese texto. Un teclado no puede escribir imágenes, así que el
+    // chip lo dice y explica cómo pegarla.
     //
     // Antes bastaba con que cambiara el contador, pero iOS lo sube solo cada
-    // vez que un campo toma el foco: el botón salía casi siempre que se abría
-    // el teclado, con lo copiado hacía rato. Ahora sólo sale si el
-    // portapapeles tiene otros tipos que la última vez (seguro que es algo
-    // nuevo), y si se ignora no vuelve por lo mismo.
+    // vez que un campo toma el foco: el chip salía casi siempre que se abría
+    // el teclado, con lo copiado hacía rato (ver
+    // `PasteboardWatch.contentMayHaveChanged`). Si se sigue escribiendo sin
+    // tocarlo, no vuelve a salir por lo mismo.
 
-    private static let pasteChip = "📋 Pegar"
-    private static let pasteDismissedKey = "kb.pasteChipDismissed"
-    private var pasteSeenCount = -1
-    private var pasteSeenAt: CFTimeInterval = 0
-    private var pasteIsNew = false
-    private var pasteSeenSignature = ""
+    /// Lo que ofrece el chip y desde cuándo.
+    private var pasteOffer: (kind: PasteChipView.Kind, since: CFTimeInterval)?
     private var pasteChipShown = false
     /// Hay algo copiado que no se leyó porque iOS habría preguntado: el panel
     /// ofrece «Pegar lo copiado».
     private var pasteWaiting = false
+    /// Cambió lo copiado y todavía no se intentó guardar.
+    private var captureNeeded = false
     private var captureTask: Task<Void, Never>?
     private var pasteTask: Task<Void, Never>?
 
-    private func pasteChipTitle() -> String? {
-        guard hasFullAccess, numPad == nil, config.pasteChip else { return nil }
-        let pasteboard = UIPasteboard.general
-        let count = pasteboard.changeCount
-        if count != pasteSeenCount {
-            let peek = PasteboardWatch.peek(pasteboard)
-            pasteSeenCount = count
-            pasteSeenAt = CACurrentMediaTime()
-            pasteSeenSignature = peek.signature
-            let change = PasteboardWatch.classify(count: peek.count, itemCount: peek.itemCount,
-                                                  types: peek.types, last: PasteboardWatch.lastMark)
-            let dismissed = AppGroup.sharedDefaults.string(forKey: Self.pasteDismissedKey) == peek.signature
-            pasteIsNew = change == .newKind && !dismissed && !pasteboard.hasImages
-                && (pasteboard.hasStrings || pasteboard.hasURLs)
+    private static let sightingCountKey = "kb.pasteboardSeenCount"
+    private static let sightingSignatureKey = "kb.pasteboardSeenSignature"
+
+    /// Lo último que el teclado vio del portapapeles, sin leerlo. Se guarda
+    /// para que valga entre una apertura del teclado y la siguiente.
+    private var lastSighting: PasteboardSighting? {
+        get {
+            guard KbPrefs.store.object(forKey: Self.sightingCountKey) != nil else { return nil }
+            return PasteboardSighting(count: KbPrefs.store.integer(forKey: Self.sightingCountKey),
+                                      signature: KbPrefs.store.string(forKey: Self.sightingSignatureKey) ?? "")
         }
-        // Sólo un rato: pasado ese tiempo ya no es «lo recién copiado».
-        guard pasteIsNew, CACurrentMediaTime() - pasteSeenAt < 90 else { return nil }
-        pasteChipShown = true
-        return Self.pasteChip
+        set {
+            guard let sighting = newValue else {
+                KbPrefs.store.removeObject(forKey: Self.sightingCountKey)
+                KbPrefs.store.removeObject(forKey: Self.sightingSignatureKey)
+                return
+            }
+            KbPrefs.store.set(sighting.count, forKey: Self.sightingCountKey)
+            KbPrefs.store.set(sighting.signature, forKey: Self.sightingSignatureKey)
+        }
     }
 
-    /// Se siguió escribiendo sin tocar el botón: no vuelve a salir por lo mismo.
+    /// Mira el portapapeles sin leerlo. Si cambió lo copiado, el chip lo
+    /// ofrece y queda pendiente de guardarse.
+    private func lookAtPasteboard() {
+        let peek = PasteboardWatch.peek()
+        let sighting = PasteboardSighting(count: peek.count, signature: peek.signature)
+        let previous = lastSighting
+        guard sighting != previous else { return }
+        lastSighting = sighting
+        if peek.types.contains(PasteboardWatch.ownType) {
+            // Lo copió ClipDeck desde su historial: ya está guardado.
+            pasteOffer = nil
+            return
+        }
+        guard PasteboardWatch.contentMayHaveChanged(from: previous, to: sighting) else { return }
+        captureNeeded = true
+        pasteOffer = currentPasteKind().map { (kind: $0, since: CACurrentMediaTime()) }
+    }
+
+    /// Qué hay en el portapapeles, sin leerlo.
+    private func currentPasteKind() -> PasteChipView.Kind? {
+        let pasteboard = UIPasteboard.general
+        if pasteboard.hasImages { return .image }
+        if pasteboard.hasURLs { return .link }
+        if pasteboard.hasStrings { return .text }
+        return nil
+    }
+
+    private func recentPasteKind() -> PasteChipView.Kind? {
+        guard hasFullAccess, numPad == nil, config.pasteChip else { return nil }
+        lookAtPasteboard()
+        // Sólo un rato: pasado ese tiempo ya no es «lo recién copiado».
+        guard let offer = pasteOffer, CACurrentMediaTime() - offer.since < 120 else { return nil }
+        pasteChipShown = true
+        return offer.kind
+    }
+
+    /// Se siguió escribiendo sin tocar el chip: no vuelve a salir por lo mismo.
     private func dismissPasteChip() {
         pasteChipShown = false
-        pasteIsNew = false
-        AppGroup.sharedDefaults.set(pasteSeenSignature, forKey: Self.pasteDismissedKey)
+        pasteOffer = nil
     }
 
-    /// Pega lo copiado porque el usuario lo pidió (botón de la barra o del
+    private func pasteChipTapped(_ kind: PasteChipView.Kind) {
+        keyFeedback()
+        pasteRecent()
+    }
+
+    /// iOS no deja a los teclados de terceros escribir imágenes ni archivos,
+    /// sólo texto: se pegan desde el menú del propio campo.
+    private static let pasteImageHint = "iOS no deja a los teclados pegar imágenes. Mantén pulsado el campo de texto y toca «Pegar»."
+
+    /// Pega lo copiado porque el usuario lo pidió (chip de la barra o botón del
     /// panel). La lectura va en segundo plano: se queda esperando mientras iOS
     /// pregunta «¿Permitir pegar?».
     private func pasteRecent() {
@@ -1874,12 +2082,14 @@ final class KeyboardViewController: UIInputViewController {
         if clipContainer == nil { clipContainer = ClipStore.makeContainer() }
         let container = clipContainer
         pasteChipShown = false
-        pasteIsNew = false
+        pasteOffer = nil
+        pasteChip.isHidden = true
         pasteTask = Task { @MainActor [weak self] in
             let reading = await CaptureService.readPasteboard(lightweight: true)
             guard let self else { return }
             self.pasteTask = nil
             self.pasteWaiting = false
+            self.captureNeeded = false
             let paused = AppGroup.sharedDefaults.bool(forKey: SettingsKeys.capturePaused)
             @MainActor func keep() {
                 // Queda también en el historial (salvo con la captura en pausa).
@@ -1901,11 +2111,13 @@ final class KeyboardViewController: UIInputViewController {
                 self.updateShiftFromContext()
                 self.scheduleSuggestions()
             case .image:
-                // Un teclado no puede insertar imágenes: se guarda y se ve en el panel.
+                // Un teclado no puede insertar imágenes: se guarda y se explica
+                // cómo pegarla desde el menú del campo.
                 keep()
-                self.showHint("Imagen guardada · mantén pulsado el campo y Pegar")
+                self.showHint(Self.pasteImageHint, duration: 4)
                 self.snapshotsAt = .distantPast
                 if self.mode == .clipboard { self.refreshMode() }
+                self.scheduleSuggestions()
             case .denied:
                 keep()
                 self.showHint("iOS no dejó leer lo copiado")
@@ -1918,11 +2130,13 @@ final class KeyboardViewController: UIInputViewController {
         }
     }
 
-    /// Captura automática al abrir el panel, en segundo plano. Sólo lee si
-    /// puede haber algo nuevo y si iOS no va a preguntar; si preguntaría, el
-    /// panel ofrece «Pegar lo copiado» en su lugar.
+    /// Captura en segundo plano: al abrir el panel y, con «Guardar
+    /// automáticamente lo que copias», en cuanto el teclado ve algo nuevo. Sólo
+    /// lee si puede haber algo nuevo y si iOS no va a preguntar; si
+    /// preguntaría, el panel ofrece «Pegar lo copiado» en su lugar.
     private func startAutoCapture() {
         guard hasFullAccess, captureTask == nil, pasteTask == nil, let container = clipContainer else { return }
+        captureNeeded = false
         captureTask = Task { @MainActor [weak self] in
             let outcome = await CaptureService.autoCapture(context: ModelContext(container), lightweight: true)
             guard let self else { return }
@@ -1932,6 +2146,7 @@ final class KeyboardViewController: UIInputViewController {
             switch outcome {
             case .saved, .duplicate:
                 refresh = true
+                self.snapshotsAt = .distantPast        // el panel lo relee al abrirse
             case .waitingForUser:
                 waiting = true
             default:
@@ -1945,6 +2160,50 @@ final class KeyboardViewController: UIInputViewController {
             self.snapshotsAt = .distantPast
             self.refreshMode()
         }
+    }
+
+    // MARK: Guardar lo copiado sin abrir el panel
+    //
+    // iOS no deja a ninguna app vigilar el portapapeles en segundo plano: sólo
+    // se puede leer con la app o el teclado en pantalla. El teclado lo mira sin
+    // leerlo al aparecer, al volver la app a primer plano y cada dos segundos
+    // mientras está abierto; si cambió lo copiado, lo guarda en el historial.
+    // Antes sólo se guardaba al abrir el panel del portapapeles.
+    //
+    // Las subidas del contador que hace iOS al cambiar de campo no cuentan:
+    // leer por ellas sacaba el aviso «ClipDeck pasted from…» sin haber copiado
+    // nada.
+
+    private var captureTimer: Timer?
+
+    private func startCaptureTimer() {
+        stopCaptureTimer()
+        guard hasFullAccess else { return }
+        let timer = Timer(timeInterval: 2, target: self, selector: #selector(captureTimerTick),
+                          userInfo: nil, repeats: true)
+        RunLoop.main.add(timer, forMode: .common)
+        captureTimer = timer
+        captureIfCopied()
+    }
+
+    private func stopCaptureTimer() {
+        captureTimer?.invalidate()
+        captureTimer = nil
+    }
+
+    @objc private func captureTimerTick() { captureIfCopied() }
+
+    private func captureIfCopied() {
+        // Sólo con el teclado en pantalla: leer el portapapeles puede hacer que
+        // iOS pregunte «¿Permitir pegar?», y no debe salir con el teclado oculto.
+        guard hasFullAccess, view.window != nil else { return }
+        let offered = pasteOffer?.since
+        lookAtPasteboard()
+        // La base se abre en segundo plano al cargar el teclado: si aún no está,
+        // `startAutoCapture` no hace nada y lo recoge la siguiente vuelta.
+        if config.autoCapture, captureNeeded { startAutoCapture() }
+        // El chip aparece sin esperar a la siguiente tecla.
+        if pasteOffer?.since != offered, mode == .keys, !searching { scheduleSuggestions() }
     }
 
     // MARK: Confirmación para olvidar una sugerencia (sin UIAlertController, no
@@ -1965,7 +2224,7 @@ final class KeyboardViewController: UIInputViewController {
         let card = UIView(frame: CGRect(x: (root.bounds.width - cardW) / 2,
                                         y: (root.bounds.height - cardH) / 2,
                                         width: cardW, height: cardH))
-        card.backgroundColor = .secondarySystemBackground
+        card.backgroundColor = KeyStyle.theme.letter
         card.layer.cornerRadius = 14
         dim.addSubview(card)
 
@@ -1974,6 +2233,7 @@ final class KeyboardViewController: UIInputViewController {
         label.textAlignment = .center
         label.font = .systemFont(ofSize: 15)
         label.text = "¿Olvidar «\(word)»?\nNo se volverá a sugerir."
+        label.textColor = KeyStyle.theme.text
         card.addSubview(label)
 
         let cancel = UIButton(type: .system)
@@ -2042,9 +2302,10 @@ final class KeyboardViewController: UIInputViewController {
 
     private func toggleClipboard() {
         keyFeedback()
-        if searchingClips {
-            // Mientras se escribe la búsqueda, el icono hace de «volver».
-            endClipSearch(showResults: true)
+        if let target = searchTarget {
+            // Mientras se escribe la búsqueda, el icono hace de «volver» al
+            // panel de donde salió.
+            endSearch(then: target == .clips ? .clipboard : .emoji)
             return
         }
         mode = (mode == .clipboard) ? .keys : .clipboard
@@ -2053,13 +2314,28 @@ final class KeyboardViewController: UIInputViewController {
 
     private func toggleEmoji() {
         keyFeedback()
-        if searchingClips { endClipSearch(showResults: false) }
+        if searching {
+            endSearch(then: .emoji)
+            return
+        }
         mode = (mode == .emoji) ? .keys : .emoji
         refreshMode()
     }
 
     private func refreshMode() {
-        if searchingClips {
+        updateTopIcons()
+        emojiButton.isHidden = searching
+        updateSearchField()
+        view.setNeedsLayout()
+        switch mode {
+        case .keys:      showKeyboard()
+        case .clipboard: showPanel(AnyView(clipboardPanel()))
+        case .emoji:     showEmojiPanel()
+        }
+    }
+
+    private func updateTopIcons() {
+        if searching {
             clipboardButton.setSymbol("chevron.backward", active: true)
         } else {
             clipboardButton.setSymbol(mode == .clipboard ? "keyboard" : "doc.on.clipboard",
@@ -2067,13 +2343,6 @@ final class KeyboardViewController: UIInputViewController {
         }
         emojiButton.setSymbol(mode == .emoji ? "keyboard" : "face.smiling",
                               active: mode == .emoji)
-        emojiButton.isHidden = searchingClips
-        searchField.isHidden = !searchingClips
-        switch mode {
-        case .keys:      showKeyboard()
-        case .clipboard: showPanel(AnyView(clipboardPanel()))
-        case .emoji:     showEmojiPanel()
-        }
     }
 
     private func insertEmoji(_ emoji: String) {
@@ -2085,8 +2354,10 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func showEmojiPanel() {
+        EmojiSearchIndex.prewarm()
         keyboardArea.isHidden = true
         panelHost?.view.isHidden = true
+        pasteChip.isHidden = true
         suggestionButtons.forEach { $0.isHidden = true }
         separatorViews.forEach { $0.isHidden = true }
         if emojiPanel == nil {
@@ -2114,7 +2385,8 @@ final class KeyboardViewController: UIInputViewController {
         panelHost?.view.isHidden = true
         emojiPanel?.isHidden = true
         keyboardArea.isHidden = false
-        if searchingClips {
+        if searching {
+            pasteChip.isHidden = true
             suggestionButtons.forEach { $0.isHidden = true }
             separatorViews.forEach { $0.isHidden = true }
             updateSearchField()
@@ -2123,11 +2395,20 @@ final class KeyboardViewController: UIInputViewController {
             separatorViews.forEach { $0.isHidden = false }
             scheduleSuggestions()
         }
+        // Los recientes se rehacen con el panel de emojis oculto, mientras se
+        // escribe: así abrirlo no espera a recolocar la colección entera.
+        if emojiPanel != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self, self.mode != .emoji else { return }
+                self.emojiPanel?.reloadCurrent()
+            }
+        }
     }
 
     private func showPanel(_ v: AnyView) {
         keyboardArea.isHidden = true
         emojiPanel?.isHidden = true
+        pasteChip.isHidden = true
         suggestionButtons.forEach { $0.isHidden = true }
         separatorViews.forEach { $0.isHidden = true }
         if panelHost == nil {
@@ -2156,6 +2437,10 @@ final class KeyboardViewController: UIInputViewController {
     private var clipContainer: ModelContainer?
     private var allSnapshots: [ClipSnapshot] = []
     private var snapshotsAt = Date.distantPast
+    private var snapshotRefreshQueued = false
+    /// Texto de búsqueda ya plegado, por elemento: plegar las tildes de 60
+    /// textos largos era lo más lento de releer el historial al abrir el panel.
+    private var searchTextCache: [UUID: (updatedAt: Date, sensitive: Bool, text: String)] = [:]
     /// Miniaturas ya hechas (en segundo plano), por elemento.
     private var thumbnails: [UUID: UIImage] = [:]
     private var thumbnailsPending = Set<UUID>()
@@ -2202,29 +2487,57 @@ final class KeyboardViewController: UIInputViewController {
             mode = .keys
             refreshMode()
             updateShiftFromContext()
-        } else if snap.isImage {
-            copyImageToPasteboard(snap.id)
         } else {
-            showHint("Los archivos no se pueden pegar desde el teclado")
+            copyAssetToPasteboard(snap.id)
         }
     }
 
-    /// Un teclado no puede insertar imágenes: se copian y se pegan desde el
-    /// menú del campo. Antes pasaba sin avisar (y decodificando la imagen
-    /// entera): parecía que el toque no había hecho nada.
-    private func copyImageToPasteboard(_ id: UUID) {
+    /// Un teclado de terceros sólo puede escribir texto: iOS no le deja pegar
+    /// imágenes ni archivos en la app. Se dejan en el portapapeles del sistema
+    /// (los archivos con su nombre) y se explica cómo pegarlos desde el menú
+    /// del campo. Antes la imagen se copiaba con un aviso de un segundo y medio
+    /// y los archivos ni eso.
+    private func copyAssetToPasteboard(_ id: UUID) {
         guard let container = clipContainer else { return }
         let context = ModelContext(container)
         var descriptor = FetchDescriptor<ClipItem>(predicate: #Predicate { $0.id == id })
         descriptor.fetchLimit = 1
-        guard let item = try? context.fetch(descriptor).first, let data = item.assetData else {
-            showHint("No se encontró la imagen")
+        guard let item = try? context.fetch(descriptor).first else {
+            showHint("No se encontró en el historial")
             return
         }
-        let type = ImageTools.typeIdentifier(of: data) ?? UTType.jpeg.identifier
-        // Con la marca de ClipDeck: no vuelve a entrar al historial como nueva.
-        PasteboardWatch.copy([type: data])
-        showHint("Imagen copiada · mantén pulsado y Pegar")
+        let isImage = item.type == .image
+        // Leer el archivo entero puede pasar del límite de memoria del teclado.
+        if let size = item.fileSize, size > 20_000_000 {
+            showHint("Es demasiado grande para copiarlo desde el teclado: ábrelo en ClipDeck", duration: 3)
+            return
+        }
+        guard let data = item.assetData, data.count <= 20_000_000 else {
+            showHint(isImage ? "No se encontró la imagen" : "No se encontró el archivo")
+            return
+        }
+        // Con la marca de ClipDeck: no vuelve a entrar al historial como nuevo
+        // ni lo ofrece el chip.
+        if isImage {
+            let type = ImageTools.typeIdentifier(of: data) ?? UTType.jpeg.identifier
+            PasteboardWatch.copy([type: data])
+        } else {
+            let name = item.fileName ?? "Archivo"
+            let ext = (name as NSString).pathExtension
+            let type = UTType(filenameExtension: ext) ?? .data
+            let provider = NSItemProvider(item: data as NSData, typeIdentifier: type.identifier)
+            provider.suggestedName = (name as NSString).deletingPathExtension
+            provider.registerDataRepresentation(forTypeIdentifier: PasteboardWatch.ownType,
+                                                visibility: .all) { completion in
+                completion(Data("1".utf8), nil)
+                return nil
+            }
+            UIPasteboard.general.setItemProviders([provider], localOnly: false, expirationDate: nil)
+            PasteboardWatch.markSeen(contentHash: nil)
+        }
+        let what = isImage ? "Imagen copiada" : "Archivo copiado"
+        showHint("\(what). iOS no deja a los teclados pegarlo: mantén pulsado el campo de texto y toca «Pegar».",
+                 duration: 4)
     }
 
     /// Prepara la base de datos por adelantado, en segundo plano.
@@ -2245,8 +2558,20 @@ final class KeyboardViewController: UIInputViewController {
         guard hasFullAccess else { return }
         // El filtro de favoritos y las reaperturas seguidas usan lo que ya está
         // en memoria: no hace falta volver a leer la base.
-        if allSnapshots.isEmpty || Date().timeIntervalSince(snapshotsAt) > 0.8 {
+        if allSnapshots.isEmpty {
             refreshSnapshots()
+        } else if Date().timeIntervalSince(snapshotsAt) > 0.8, !snapshotRefreshQueued {
+            // Con algo ya en memoria el panel se abre con eso y la base se relee
+            // justo después, con el panel ya en pantalla: antes el cambio de
+            // vista esperaba a SwiftData.
+            snapshotRefreshQueued = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self else { return }
+                self.snapshotRefreshQueued = false
+                guard self.mode == .clipboard, !self.searching else { return }
+                self.refreshSnapshots()
+                self.refreshMode()
+            }
         }
     }
 
@@ -2271,9 +2596,17 @@ final class KeyboardViewController: UIInputViewController {
         allSnapshots = items.map { item in
             let isImage = item.type == .image
             if isImage, !item.isSensitive, wanted.count < 24 { wanted.append(item.id) }
+            let searchText: String
+            if let cached = searchTextCache[item.id], cached.updatedAt == item.updatedAt,
+               cached.sensitive == item.isSensitive {
+                searchText = cached.text
+            } else {
+                searchText = Self.searchText(for: item)
+                searchTextCache[item.id] = (item.updatedAt, item.isSensitive, searchText)
+            }
             return ClipSnapshot(id: item.id, typeLabel: item.type.label, systemImage: item.type.systemImage,
                                 preview: item.displayTitle, insertable: insertableText(for: item),
-                                searchText: Self.searchText(for: item),
+                                searchText: searchText,
                                 isImage: isImage, thumbnail: thumbnails[item.id],
                                 isSensitive: item.isSensitive, isFavorite: item.isFavorite)
         }
@@ -2347,47 +2680,112 @@ final class KeyboardViewController: UIInputViewController {
         if mode != .clipboard {
             allSnapshots = []
             thumbnails = [:]
+            searchTextCache = [:]
         }
     }
 
-    // MARK: Búsqueda en el portapapeles
+    // MARK: Búsqueda (portapapeles y emojis)
     //
     // Un campo de texto dentro de un teclado no puede recibir texto: el
     // teclado del sistema no se abre para él. Antes el buscador del panel se
     // podía tocar pero no escribir en él. Ahora, al tocarlo, vuelven las
     // teclas y escriben en la búsqueda; «Buscar» (o el icono de la izquierda)
-    // muestra los resultados.
+    // muestra los resultados. La de emojis va igual, con los resultados
+    // encima de las teclas mientras se escribe.
 
-    private func beginClipSearch() {
+    private func beginClipSearch() { beginSearch(.clips) }
+
+    private func beginSearch(_ target: SearchTarget) {
         keyFeedback()
-        searchingClips = true
+        searchTarget = target
+        if target == .emoji { emojiQuery = "" }
         numPad = nil
         symbolsMode = false
         shift = .off
         shiftByUser = false
         suggestionWork?.cancel()
         mode = .keys
+        updateHeight()
         rebuildKeys()
         refreshMode()
     }
 
-    private func endClipSearch(showResults: Bool) {
-        searchingClips = false
+    /// Cierra la búsqueda y abre `next`: el panel de donde salió o las letras.
+    private func endSearch(then next: Mode) {
+        if searchTarget == .emoji { emojiQuery = "" }
+        searchTarget = nil
+        symbolsMode = textDocumentProxy.keyboardType == .numbersAndPunctuation
         numPad = numPadDismissed ? nil : Self.numPad(for: textDocumentProxy.keyboardType)
+        updateHeight()
         rebuildKeys()
-        mode = showResults ? .clipboard : .keys
+        mode = next
         refreshMode()
-        if !showResults { updateShiftFromContext() }
+        if next == .keys { updateShiftFromContext() }
+    }
+
+    /// Lo que se está escribiendo en la búsqueda activa.
+    private var activeQuery: String {
+        get { searchTarget == .emoji ? emojiQuery : clipQuery }
+        set {
+            if searchTarget == .emoji { emojiQuery = newValue } else { clipQuery = newValue }
+        }
     }
 
     private func appendToQuery(_ text: String) {
-        clipQuery += text
+        activeQuery += text
         updateSearchField()
     }
 
+    private func deleteFromQuery() {
+        guard !activeQuery.isEmpty else { return }
+        activeQuery.removeLast()
+        updateSearchField()
+    }
+
+    /// El campo de la barra superior: la búsqueda que se está escribiendo o,
+    /// en el panel de emojis, la lupa para empezar una.
     private func updateSearchField() {
-        let count: Int? = clipQuery.trimmingCharacters(in: .whitespaces).isEmpty ? nil : visibleSnapshots().count
-        searchField.update(query: clipQuery, matches: count)
+        switch searchTarget {
+        case .clips:
+            let count: Int? = clipQuery.trimmingCharacters(in: .whitespaces).isEmpty ? nil : visibleSnapshots().count
+            searchField.configure(placeholder: "Buscar en el portapapeles", editing: true)
+            searchField.update(query: clipQuery, matches: count)
+        case .emoji:
+            searchField.configure(placeholder: "Buscar emoji", editing: true)
+            searchField.update(query: emojiQuery, matches: nil)
+            showEmojiResults()
+        case nil:
+            searchField.configure(placeholder: "Buscar emoji", editing: false)
+            searchField.update(query: "", matches: nil)
+            emojiResults.show([], message: nil)
+        }
+        searchField.isHidden = !(searching || mode == .emoji)
+        emojiResults.isHidden = searchTarget != .emoji
+    }
+
+    // MARK: Búsqueda de emojis
+    //
+    // La lupa del panel de emojis abre las letras con una fila de resultados
+    // encima, que cambia con cada letra. Tocar un resultado lo escribe y deja
+    // seguir eligiendo; «OK» vuelve a las letras y el icono de la izquierda,
+    // al panel.
+
+    private func beginEmojiSearch() {
+        EmojiSearchIndex.prewarm()
+        beginSearch(.emoji)
+    }
+
+    /// Lo encontrado, con el tono elegido para cada emoji; sin nada escrito,
+    /// los recientes.
+    private func showEmojiResults() {
+        let query = emojiQuery.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else {
+            emojiResults.show(EmojiStore.recents, message: "Escribe para buscar un emoji")
+            return
+        }
+        let panel = emojiPanel
+        let found = EmojiSearchIndex.keyboard.search(query).map { panel?.displayed($0) ?? $0 }
+        emojiResults.show(found, message: "Ningún emoji con «\(query)»")
     }
 }
 
@@ -2428,27 +2826,15 @@ final class KeyAreaView: UIView {
     }
 }
 
-// MARK: - Colores de tecla
+// MARK: - Tema activo
 //
-// Los del teclado del sistema. Antes las teclas de función (mayúsculas,
-// borrar, 123, retorno, coma y punto) usaban `systemGray4`, casi el mismo gris
-// que el fondo del teclado en modo claro: se veía el símbolo pero no la
-// tecla. Y en modo oscuro las letras quedaban más oscuras que el fondo.
+// Lo elige el usuario en la app (Configuración del teclado → Tema) y el
+// controlador lo fija al cargar la configuración. Las vistas lo leen al
+// construirse o al repintarse; el Clásico, el de por defecto, son los colores
+// de siempre.
 
 enum KeyStyle {
-    static let letter = UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(white: 0.42, alpha: 1) : .white }
-    static let function = UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(white: 0.27, alpha: 1) : UIColor(red: 0.67, green: 0.70, blue: 0.73, alpha: 1) }
-    static let letterPressed = function
-    static let functionPressed = letter
-    static let accent = UIColor.systemBlue
-    static let accentPressed = UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor.systemBlue.withAlphaComponent(0.6) : UIColor.systemBlue.withAlphaComponent(0.7) }
-    static let shadow = UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(white: 0, alpha: 0.4) : UIColor(red: 0.53, green: 0.54, blue: 0.56, alpha: 1) }
-    static let popup = UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(white: 0.42, alpha: 1) : .white }
+    static var theme = KeyboardTheme.named(KeyboardTheme.defaultID)
 }
 
 // MARK: - Fila de teclas (UIKit)
@@ -2551,22 +2937,28 @@ final class KeyView: UIView {
         self.baseValue = spec.value
         super.init(frame: .zero)
 
-        layer.cornerRadius = 8
-        layer.shadowOffset = CGSize(width: 0, height: 1)
-        layer.shadowRadius = 0
-        layer.shadowOpacity = 1
+        let theme = KeyStyle.theme
+        layer.cornerRadius = theme.cornerRadius
+        if theme.keyShadow != nil {
+            layer.shadowOffset = CGSize(width: 0, height: 1)
+            layer.shadowRadius = 0
+            layer.shadowOpacity = 1
+        }
+        if theme.keyBorder != nil {
+            layer.borderWidth = 1
+        }
         clipsToBounds = false
         isMultipleTouchEnabled = true
         isExclusiveTouch = false
 
         label.textAlignment = .center
-        label.textColor = .label
+        label.textColor = theme.text
         label.adjustsFontSizeToFitWidth = true
         label.minimumScaleFactor = 0.6
         addSubview(label)
 
         icon.contentMode = .center
-        icon.tintColor = .label
+        icon.tintColor = theme.text
         icon.isHidden = true
         addSubview(icon)
 
@@ -2580,14 +2972,20 @@ final class KeyView: UIView {
             } else {
                 label.text = spec.value
                 label.font = .systemFont(ofSize: 16, weight: spec.accent ? .semibold : .regular)
-                if spec.accent { label.textColor = .white }
             }
-        case .space:     label.text = "espacio"; label.textColor = .secondaryLabel; label.font = .systemFont(ofSize: 15)
-        case .mode:      label.text = spec.value; label.font = .systemFont(ofSize: 16)
+            if theme.accentReturn {
+                label.textColor = theme.accentText
+                icon.tintColor = theme.accentText
+            }
+        case .space:
+            label.text = "espacio"
+            label.textColor = theme.secondaryText
+            label.font = .systemFont(ofSize: 15, weight: theme.boldKeys ? .semibold : .regular)
+        case .mode:      label.text = spec.value; label.font = .systemFont(ofSize: 16, weight: theme.boldKeys ? .semibold : .regular)
         default:         label.text = spec.value
         }
         backgroundColor = baseColor(pressed: false)
-        layer.shadowColor = KeyStyle.shadow.resolvedColor(with: traitCollection).cgColor
+        updateLayerColors()
 
         // El globo pasa todos sus toques al sistema: un toque cambia de
         // teclado y una pulsación larga muestra la lista, como en iOS.
@@ -2623,12 +3021,21 @@ final class KeyView: UIView {
         label.frame = bounds.insetBy(dx: 2, dy: 0)
         icon.frame = bounds
         globeButton?.frame = bounds
-        layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: layer.cornerRadius).cgPath
+        if layer.shadowOpacity > 0 {
+            layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: layer.cornerRadius).cgPath
+        }
+    }
+
+    /// La sombra y el borde son CGColor: no cambian solos con el modo claro u oscuro.
+    private func updateLayerColors() {
+        let theme = KeyStyle.theme
+        layer.shadowColor = theme.keyShadow?.resolvedColor(with: traitCollection).cgColor
+        layer.borderColor = theme.keyBorder?.resolvedColor(with: traitCollection).cgColor
     }
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
-        layer.shadowColor = KeyStyle.shadow.resolvedColor(with: traitCollection).cgColor
+        updateLayerColors()
     }
 
     @objc private func globeDown() {
@@ -2640,7 +3047,7 @@ final class KeyView: UIView {
 
     func setFontSize(_ size: CGFloat) {
         if spec.kind == .char || spec.kind == .comma || spec.kind == .period {
-            label.font = .systemFont(ofSize: size)
+            label.font = .systemFont(ofSize: size, weight: KeyStyle.theme.boldKeys ? .semibold : .regular)
         }
     }
 
@@ -2663,8 +3070,9 @@ final class KeyView: UIView {
         guard spec.kind == .shift else { return }
         shiftActive = active
         setIcon([caps ? "capslock.fill" : (active ? "shift.fill" : "shift")], fallback: caps ? "⇪" : "⇧")
-        icon.tintColor = active ? .black : .label
-        label.textColor = active ? .black : .label
+        let theme = KeyStyle.theme
+        icon.tintColor = active ? theme.shiftOnText : theme.text
+        label.textColor = active ? theme.shiftOnText : theme.text
         backgroundColor = baseColor(pressed: false)
     }
 
@@ -2673,15 +3081,16 @@ final class KeyView: UIView {
     }
 
     private func baseColor(pressed: Bool) -> UIColor {
+        let theme = KeyStyle.theme
         switch spec.kind {
         case .char, .space:
-            return pressed ? KeyStyle.letterPressed : KeyStyle.letter
-        case .ret where spec.accent:
-            return pressed ? KeyStyle.accentPressed : KeyStyle.accent
-        case .shift where shiftActive:
-            return .white
+            return pressed ? theme.letterPressed : theme.letter
+        case .ret where theme.accentReturn:
+            return pressed ? theme.accent.withAlphaComponent(0.7) : theme.accent
+        case .shift where shiftActive && !pressed:
+            return theme.shiftOn
         default:
-            return pressed ? KeyStyle.functionPressed : KeyStyle.function
+            return pressed ? theme.functionPressed : theme.function
         }
     }
 
@@ -2933,12 +3342,20 @@ final class KeyView: UIView {
         var x = accentRTL ? kf.midX + cellW / 2 + 4 - w : kf.midX - cellW / 2 - 4
         x = min(max(x, 3), root.bounds.width - w - 3)
         let bar = UIView(frame: CGRect(x: x, y: max(kf.minY - hgt - 6, 2), width: w, height: hgt))
-        bar.backgroundColor = KeyStyle.popup
+        let theme = KeyStyle.theme
+        bar.backgroundColor = theme.menu
         bar.layer.cornerRadius = 10
-        bar.layer.shadowColor = UIColor.black.cgColor
-        bar.layer.shadowOpacity = 0.25
-        bar.layer.shadowRadius = 4
-        bar.layer.shadowOffset = CGSize(width: 0, height: 1)
+        // El Clásico lo tiene plano, como siempre; los temas con relieve, con sombra.
+        if theme.keyShadow != nil {
+            bar.layer.shadowColor = UIColor.black.cgColor
+            bar.layer.shadowOpacity = 0.25
+            bar.layer.shadowRadius = 4
+            bar.layer.shadowOffset = CGSize(width: 0, height: 1)
+        }
+        if let border = theme.keyBorder {
+            bar.layer.borderWidth = 1
+            bar.layer.borderColor = border.resolvedColor(with: traitCollection).cgColor
+        }
         root.addSubview(bar)
         // Mayúscula si lo que se escribió al apoyar ya lo era (la tecla ya
         // vuelve a minúscula después de la primera letra de la frase).
@@ -2973,8 +3390,9 @@ final class KeyView: UIView {
         let count = accentLabels.count
         for (slot, l) in accentLabels.enumerated() {
             let index = accentRTL ? count - 1 - slot : slot
-            l.backgroundColor = index == selectedAccent ? .tintColor : .clear
-            l.textColor = index == selectedAccent ? .white : .label
+            let theme = KeyStyle.theme
+            l.backgroundColor = index == selectedAccent ? theme.accent : .clear
+            l.textColor = index == selectedAccent ? theme.accentText : theme.text
         }
     }
 }
@@ -3085,7 +3503,7 @@ struct ClipboardPanel: View {
         .padding(.leading, 10)
         .padding(.trailing, 2)
         .frame(height: 32)
-        .background(Color(KeyStyle.letter), in: Capsule())
+        .background(Color(KeyStyle.theme.letter), in: Capsule())
         .contentShape(Capsule())
         .onTapGesture(perform: onSearch)
         .padding(.horizontal, 6)
@@ -3098,8 +3516,8 @@ struct ClipboardPanel: View {
             Text(text).font(.caption)
         }
         .padding(.horizontal, 10).frame(height: 28)
-        .background(active ? Color.accentColor.opacity(0.22) : Color(KeyStyle.letter), in: Capsule())
-        .foregroundStyle(active ? Color.accentColor : Color.primary)
+        .background(active ? Color(KeyStyle.theme.accent).opacity(0.22) : Color(KeyStyle.theme.letter), in: Capsule())
+        .foregroundStyle(active ? Color(KeyStyle.theme.accent) : Color.primary)
         .contentShape(Capsule())
         .onTapGesture(perform: action)
     }
@@ -3116,7 +3534,7 @@ struct ClipboardPanel: View {
                 Label("Sensible", systemImage: "eye.slash").font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else if let thumbnail = snap.thumbnail {
-                Image(uiImage: thumbnail).resizable().scaledToFill()
+                FillImage(image: thumbnail)
                     .frame(maxWidth: .infinity).frame(height: 54)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
             } else if snap.isImage {
@@ -3129,14 +3547,19 @@ struct ClipboardPanel: View {
             }
         }
         .padding(8).frame(height: 92, alignment: .topLeading)
-        .background(Color(KeyStyle.letter), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color(KeyStyle.theme.letter), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 
-// MARK: - Campo de búsqueda del portapapeles (mientras se escribe)
+// MARK: - Campo de búsqueda de la barra superior
+//
+// Mientras se escribe una búsqueda (portapapeles o emojis) enseña lo escrito con
+// un cursor que parpadea. En el panel de emojis, sin escribir, es la lupa para
+// empezar a buscar: tocarlo llama a `onTap`.
 
-final class ClipSearchFieldView: UIView {
+final class SearchFieldView: UIView {
     var onClear: (() -> Void)?
+    var onTap: (() -> Void)?
 
     private let icon = UIImageView()
     private let label = UILabel()
@@ -3146,11 +3569,9 @@ final class ClipSearchFieldView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = KeyStyle.letter
         layer.cornerRadius = 10
 
         icon.image = UIImage(systemName: "magnifyingglass")
-        icon.tintColor = .secondaryLabel
         icon.contentMode = .center
         addSubview(icon)
 
@@ -3158,35 +3579,62 @@ final class ClipSearchFieldView: UIView {
         label.lineBreakMode = .byTruncatingHead      // se ve siempre el final de lo escrito
         addSubview(label)
 
-        caret.backgroundColor = .tintColor
         caret.isUserInteractionEnabled = false
         addSubview(caret)
 
         countLabel.font = .systemFont(ofSize: 12)
-        countLabel.textColor = .secondaryLabel
         addSubview(countLabel)
 
         clearButton.setSymbol("xmark.circle.fill")
         clearButton.onTap = { [weak self] in self?.onClear?() }
         addSubview(clearButton)
+        isAccessibilityElement = true
         update(query: "", matches: nil)
+        applyTheme()
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    private var showsPlaceholder = true
+    private var placeholder = "Buscar"
+    /// Se está escribiendo en él; si no, es un botón que abre la búsqueda.
+    private var isEditing = true
+
+    func configure(placeholder: String, editing: Bool) {
+        guard placeholder != self.placeholder || editing != isEditing else { return }
+        self.placeholder = placeholder
+        isEditing = editing
+        caret.isHidden = !editing
+        accessibilityTraits = editing ? .searchField : .button
+        alpha = 1
+        setNeedsLayout()
+    }
+
+    func applyTheme() {
+        let theme = KeyStyle.theme
+        backgroundColor = theme.letter
+        icon.tintColor = theme.secondaryText
+        caret.backgroundColor = theme.accent
+        countLabel.textColor = theme.secondaryText
+        label.textColor = showsPlaceholder ? theme.secondaryText : theme.text
+        clearButton.setSymbol("xmark.circle.fill")
+    }
+
     func update(query: String, matches: Int?) {
+        showsPlaceholder = query.isEmpty
+        accessibilityLabel = query.isEmpty ? placeholder : query
         if query.isEmpty {
-            label.text = "Buscar en el portapapeles"
-            label.textColor = .secondaryLabel
+            label.text = placeholder
+            label.textColor = KeyStyle.theme.secondaryText
         } else {
             label.text = query
-            label.textColor = .label
+            label.textColor = KeyStyle.theme.text
         }
         if let matches {
             countLabel.text = matches == 1 ? "1 resultado" : "\(matches) resultados"
         } else {
             countLabel.text = nil
         }
-        clearButton.isHidden = query.isEmpty
+        clearButton.isHidden = query.isEmpty || !isEditing
         caret.frame.origin.x = -100          // se recoloca en layoutSubviews
         setNeedsLayout()
     }
@@ -3222,33 +3670,23 @@ final class ClipSearchFieldView: UIView {
     }
 
     // Los toques en el campo se quedan aquí: no deben llegar a la barra
-    // superior, que los reparte entre los iconos de los extremos.
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {}
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {}
-}
-
-// MARK: - Emojis
-
-enum EmojiStore {
-    static let recentsKey = "keyboard.recentEmojis"
-    static var recents: [String] { UserDefaults.standard.stringArray(forKey: recentsKey) ?? [] }
-    static func registerRecent(_ e: String) {
-        var l = recents; l.removeAll { $0 == e }; l.insert(e, at: 0)
-        UserDefaults.standard.set(Array(l.prefix(24)), forKey: recentsKey)
+    // superior, que los reparte entre los iconos de los extremos. Como botón,
+    // se aclara al apoyar el dedo y abre la búsqueda al soltarlo encima.
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if !isEditing { alpha = 0.6 }
     }
-    static let categories: [(icon: String, emojis: [String])] = [
-        ("😀", ["😀","😃","😄","😁","😆","😅","😂","🤣","🥲","🥹","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😗","😙","😚","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🥸","🤩","🥳","😏","😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😢","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🫣","🤗","🫡","🤔","🫢","🤭","🤫","🤥","😶","🫥","😐","😑","😬","🙄","😯","😦","😧","😮","😲","🥱","😴","🤤","😪","😵","😵‍💫","🫠","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻","💀","☠️","👽","👾","🤖","🎃","😺","😸","😹","😻","😼","😽","🙀","😿","😾"]),
-        ("👋", ["👋","🤚","🖐️","✋","🖖","🫱","🫲","🫳","🫴","👌","🤌","🤏","✌️","🤞","🫰","🤟","🤘","🤙","👈","👉","👆","🖕","👇","☝️","👍","👎","✊","👊","🤛","🤜","👏","🙌","🫶","👐","🤲","🤝","🙏","✍️","💅","🤳","💪","🦾","🦵","🦿","🦶","👣","👂","🦻","👃","🧠","🫀","🫁","🦷","🦴","👀","👁️","👅","👄","🫦","💋","🩸"]),
-        ("❤️", ["❤️","🧡","💛","💚","💙","🩵","💜","🖤","🤍","🤎","💔","❤️‍🔥","❤️‍🩹","❣️","💕","💞","💓","💗","💖","💘","💝","💟","♥️","💌","💐","🌹","🌷","🌸","💮","🏵️","🌺","🌻","🌼","🌈","⭐","🌟","✨","💫","🔥","💥","💯"]),
-        ("🐶", ["🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐻‍❄️","🐨","🐯","🦁","🐮","🐷","🐽","🐸","🐵","🙈","🙉","🙊","🐒","🐔","🐧","🐦","🐤","🐣","🦆","🦅","🦉","🦇","🐺","🐗","🐴","🦄","🐝","🪱","🐛","🦋","🐌","🐞","🐜","🪰","🐢","🐍","🦎","🦖","🐙","🦑","🦐","🦞","🦀","🐡","🐠","🐟","🐬","🐳","🐋","🦈","🐊","🐅","🐆","🦓","🦍","🐘","🦣","🦏","🐪","🐫","🦒","🐃","🐂","🐄","🐎","🐖","🐏","🐑","🦙","🐐","🦌","🐕","🐩","🦮","🐈","🐓","🦃","🦤","🦚","🦜","🦢","🕊️","🐇","🦝","🦨","🦡","🦫","🦦","🦥","🐁","🐀","🐿️","🦔"]),
-        ("🍕", ["🍏","🍎","🍐","🍊","🍋","🍌","🍉","🍇","🍓","🫐","🍈","🍒","🍑","🥭","🍍","🥥","🥝","🍅","🍆","🥑","🥦","🥬","🥒","🌶️","🫑","🌽","🥕","🫒","🧄","🧅","🥔","🍠","🥐","🥯","🍞","🥖","🥨","🧀","🥚","🍳","🧈","🥞","🧇","🥓","🥩","🍗","🍖","🌭","🍔","🍟","🍕","🫓","🥪","🥙","🧆","🌮","🌯","🫔","🥗","🥘","🫕","🍝","🍜","🍲","🍛","🍣","🍱","🥟","🦪","🍤","🍙","🍚","🍘","🍥","🥠","🍢","🍡","🍧","🍨","🍦","🥧","🧁","🍰","🎂","🍮","🍭","🍬","🍫","🍿","🍩","🍪","🌰","🥜","🍯","🥛","🍼","🫖","☕","🍵","🧃","🥤","🧋","🍶","🍺","🍻","🥂","🍷","🥃","🍸","🍹","🍾","🧉"]),
-        ("⚽", ["⚽","🏀","🏈","⚾","🥎","🎾","🏐","🏉","🥏","🎱","🪀","🏓","🏸","🏒","🏑","🥍","🏏","🪃","🥅","⛳","🪁","🏹","🎣","🤿","🥊","🥋","🎽","🛹","🛼","🛷","⛸️","🥌","🎿","⛷️","🏂","🪂","🏋️","🤼","🤸","🤺","⛹️","🤾","🏌️","🏇","🧘","🏄","🏊","🤽","🚣","🧗","🚴","🚵","🏆","🥇","🥈","🥉","🏅","🎖️","🏵️","🎗️","🎫","🎟️","🎪","🎭","🎨","🎬","🎤","🎧","🎼","🎹","🥁","🎷","🎺","🎸","🪕","🎻","🎲","♟️","🎯","🎳","🎮","🎰","🧩"]),
-        ("🚗", ["🚗","🚕","🚙","🚌","🚎","🏎️","🚓","🚑","🚒","🚐","🛻","🚚","🚛","🚜","🦯","🦽","🦼","🛴","🚲","🛵","🏍️","🛺","🚨","🚔","🚍","🚘","🚖","🚡","🚠","🚟","🚃","🚋","🚞","🚝","🚄","🚅","🚈","🚂","🚆","🚇","🚊","🚉","✈️","🛫","🛬","🛩️","💺","🛰️","🚀","🛸","🚁","🛶","⛵","🚤","🛥️","🛳️","⛴️","🚢","⚓","🪝","⛽","🚧","🚦","🚥","🗺️","🗿","🗽","🗼","🏰","🏯","🏟️","🎡","🎢","🎠","⛲","⛱️","🏖️","🏝️","🏔️","⛰️","🌋","🗻","🏕️","⛺","🏠","🏡","🏘️","🏙️","🌆","🌃","🌉","🌁"]),
-        ("💡", ["⌚","📱","📲","💻","⌨️","🖥️","🖨️","🖱️","🖲️","🕹️","🗜️","💽","💾","💿","📀","📼","📷","📸","📹","🎥","📽️","🎞️","📞","☎️","📟","📠","📺","📻","🎙️","🎚️","🎛️","🧭","⏱️","⏲️","⏰","🕰️","⌛","⏳","📡","🔋","🪫","🔌","💡","🔦","🕯️","🪔","🧯","🛢️","💸","💵","💴","💶","💷","🪙","💰","💳","🧾","💎","⚖️","🪜","🧰","🪛","🔧","🔨","⚒️","🛠️","⛏️","🪚","🔩","⚙️","🪤","🧱","⛓️","🧲","🔫","💣","🧨","🪓","🔪","🗡️","⚔️","🛡️","🚬","⚰️","🪦","⚱️","🏺","🔮","📿","🧿","💈","⚗️","🔭","🔬","🕳️","🩻","🩹","🩺","💊","💉","🩸","🧬","🦠","🧫","🧪","🌡️","🧹","🪠","🧺","🧻","🚽","🚰","🚿","🛁","🛀","🧼","🪥","🪒","🧽","🪣","🧴","🛎️","🔑","🗝️","🚪","🪑","🛋️","🛏️","🛌","🧸","🪆","🖼️","🪞","🪟","🛍️","🛒","🎁","🎈","🎏","🎀","🪄","🪅","🎊","🎉"]),
-        ("🔣", ["✅","❌","❎","✔️","☑️","❓","❔","❗","❕","‼️","⁉️","💯","🔞","📵","🚭","🚫","💤","♨️","💢","💬","🗨️","🗯️","💭","🔍","🔎","🔒","🔓","🔏","🔐","🔗","⛓️","📛","🆔","⚠️","🚸","☢️","☣️","⬆️","↗️","➡️","↘️","⬇️","↙️","⬅️","↖️","↕️","↔️","↩️","↪️","⤴️","⤵️","🔃","🔄","🔙","🔚","🔛","🔜","🔝","🛐","⚛️","🕉️","✡️","☸️","☯️","✝️","☦️","☪️","☮️","🕎","🔯","♈","♉","♊","♋","♌","♍","♎","♏","♐","♑","♒","♓","⛎","▶️","⏸️","⏯️","⏹️","⏺️","⏭️","⏮️","⏩","⏪","⏫","⏬","◀️","🔼","🔽","🔀","🔁","🔂","🔄","🔊","🔉","🔈","🔇","📢","📣","🔔","🔕","🎵","🎶","➕","➖","➗","✖️","🟰","♾️","💲","💱","™️","©️","®️","〰️","➰","➿","🔚","🔙","#️⃣","*️⃣","0️⃣","1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟","🔢","🔣","🔤","🅰️","🆎","🅱️","🆑","🆒","🆓","ℹ️","🆔","Ⓜ️","🆕","🆖","🅾️","🆗","🅿️","🆘","🆙","🆚","🈁","🔴","🟠","🟡","🟢","🔵","🟣","🟤","⚫","⚪","🟥","🟧","🟨","🟩","🟦","🟪","🟫","⬛","⬜","◼️","◻️","▪️","▫️","🔶","🔷","🔸","🔹","🔺","🔻","💠","🔘","🔳","🔲","🏁","🚩","🎌","🏴","🏳️","🏳️‍🌈","🏳️‍⚧️","🏴‍☠️"])
-    ]
-}
 
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard !isEditing else { return }
+        alpha = 1
+        if let t = touches.first, !bounds.insetBy(dx: -8, dy: -8).contains(t.location(in: self)) { return }
+        onTap?()
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        alpha = 1
+    }
+}
 
 // MARK: - Botón de sugerencia (toque propio, fiable en teclados)
 
@@ -3271,14 +3709,18 @@ final class SuggestionButton: UIView {
         super.init(frame: frame)
         label.textAlignment = .center
         label.font = .systemFont(ofSize: 17)
-        label.textColor = .label
         label.adjustsFontSizeToFitWidth = true
         label.minimumScaleFactor = 0.7
         label.lineBreakMode = .byTruncatingTail
         addSubview(label)
         layer.cornerRadius = 6
+        applyTheme()
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    func applyTheme() {
+        label.textColor = KeyStyle.theme.text
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -3289,7 +3731,7 @@ final class SuggestionButton: UIView {
         guard !text.isEmpty else { return }
         isDown = true
         didLong = false
-        backgroundColor = UIColor.systemGray4
+        backgroundColor = KeyStyle.theme.function
         longTimer?.invalidate()
         longTimer = KeyboardViewController.commonTimer(0.5) { [weak self] in
             guard let self, self.isDown else { return }
@@ -3315,316 +3757,6 @@ final class SuggestionButton: UIView {
     }
 }
 
-// MARK: - Panel de emojis en UIKit (scroll fluido + tonos de piel)
-
-final class EmojiCell: UICollectionViewCell {
-    let label = UILabel()
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        label.textAlignment = .center
-        label.font = .systemFont(ofSize: 30)
-        label.frame = bounds
-        label.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        contentView.addSubview(label)
-    }
-    required init?(coder: NSCoder) { fatalError() }
-}
-
-final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
-    var insert: ((String) -> Void)?
-    var backToKeys: (() -> Void)?
-    var deleteDown: (() -> Void)?
-    var deleteUp: (() -> Void)?
-
-    private var collection: UICollectionView!
-    private let bottomBar = UIView()
-    private let abcButton = UIButton(type: .system)
-    private let deleteButton = UIButton(type: .system)
-    private let categoryScroll = UIScrollView()
-    private var categoryButtons: [UIButton] = []
-
-    private var categoryIndex = -1            // -1 = recientes
-    private var current: [String] = []
-    private var tonePopup: UIView?
-
-    private let tonesKey = "keyboard.emojiTones"   // [baseEmoji: toneIndex 0...4]
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = .clear
-
-        let layout = UICollectionViewFlowLayout()
-        layout.scrollDirection = .vertical
-        layout.minimumInteritemSpacing = 0
-        layout.minimumLineSpacing = 2
-        collection = UICollectionView(frame: .zero, collectionViewLayout: layout)
-        collection.backgroundColor = .clear
-        collection.dataSource = self
-        collection.delegate = self
-        collection.alwaysBounceVertical = true
-        collection.register(EmojiCell.self, forCellWithReuseIdentifier: "e")
-        addSubview(collection)
-
-        let lp = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
-        lp.minimumPressDuration = 0.35
-        lp.allowableMovement = 30      // permite arrastrar hasta la barra de tonos
-        collection.addGestureRecognizer(lp)
-
-        bottomBar.backgroundColor = .clear
-        addSubview(bottomBar)
-
-        abcButton.setTitle("ABC", for: .normal)
-        abcButton.titleLabel?.font = .systemFont(ofSize: 15)
-        abcButton.setTitleColor(.label, for: .normal)
-        abcButton.backgroundColor = .secondarySystemBackground
-        abcButton.layer.cornerRadius = 7
-        abcButton.addTarget(self, action: #selector(tapABC), for: .touchDown)
-        bottomBar.addSubview(abcButton)
-
-        deleteButton.setImage(UIImage(systemName: "delete.left"), for: .normal)
-        deleteButton.tintColor = .label
-        deleteButton.backgroundColor = .secondarySystemBackground
-        deleteButton.layer.cornerRadius = 7
-        deleteButton.addTarget(self, action: #selector(delDown), for: .touchDown)
-        deleteButton.addTarget(self, action: #selector(delUp), for: [.touchUpInside, .touchUpOutside, .touchCancel])
-        bottomBar.addSubview(deleteButton)
-
-        categoryScroll.showsHorizontalScrollIndicator = false
-        bottomBar.addSubview(categoryScroll)
-        for (i, cat) in EmojiCatalog.categories.enumerated() {
-            let b = makeCatButton(cat.icon, index: i)
-            categoryScroll.addSubview(b)
-            categoryButtons.append(b)
-        }
-        // botón de recientes al inicio
-        let rec = makeCatButton("🕐", index: -1)
-        categoryScroll.addSubview(rec)
-        categoryButtons.insert(rec, at: 0)
-    }
-    required init?(coder: NSCoder) { fatalError() }
-
-    private func makeCatButton(_ icon: String, index: Int) -> UIButton {
-        let b = UIButton(type: .system)
-        b.setTitle(icon, for: .normal)
-        b.titleLabel?.font = .systemFont(ofSize: 18)
-        b.tag = index
-        b.layer.cornerRadius = 7
-        b.addTarget(self, action: #selector(tapCategory(_:)), for: .touchDown)
-        return b
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        let barH: CGFloat = 42
-        collection.frame = CGRect(x: 0, y: 2, width: bounds.width, height: bounds.height - barH - 2)
-        bottomBar.frame = CGRect(x: 0, y: bounds.height - barH, width: bounds.width, height: barH)
-
-        abcButton.frame = CGRect(x: 4, y: 4, width: 48, height: 34)
-        deleteButton.frame = CGRect(x: bounds.width - 48, y: 4, width: 44, height: 34)
-        categoryScroll.frame = CGRect(x: 56, y: 4, width: bounds.width - 56 - 52, height: 34)
-        var x: CGFloat = 0
-        for b in categoryButtons {
-            b.frame = CGRect(x: x, y: 0, width: 36, height: 34)
-            x += 38
-        }
-        categoryScroll.contentSize = CGSize(width: x, height: 34)
-        highlightCategory()
-    }
-
-    func reloadCurrent() {
-        var next: [String] = current
-        if categoryIndex == -1 {
-            let recents = EmojiStore.recents
-            next = recents.isEmpty ? EmojiCatalog.categories.first?.emojis ?? [] : recents
-        } else if categoryIndex >= 0 && categoryIndex < EmojiCatalog.categories.count {
-            next = EmojiCatalog.categories[categoryIndex].emojis
-        }
-        // Rehacer la cuadrícula de 1.900 celdas cuando no cambió nada era otro
-        // motivo de tirón al abrir el panel.
-        if next == current && !current.isEmpty {
-            highlightCategory()
-            return
-        }
-        current = next
-        collection.reloadData()
-        collection.setContentOffset(.zero, animated: false)
-        highlightCategory()
-    }
-
-    private func highlightCategory() {
-        for b in categoryButtons {
-            b.backgroundColor = (b.tag == categoryIndex) ? UIColor.tintColor.withAlphaComponent(0.22) : .clear
-        }
-    }
-
-    // Aplica el tono guardado a un emoji base (si lo tiene).
-    private func displayed(_ base: String) -> String {
-        guard let variants = EmojiCatalog.toneVariants[base] else { return base }
-        let dict = UserDefaults.standard.dictionary(forKey: tonesKey) as? [String: Int] ?? [:]
-        if let i = dict[base], variants.indices.contains(i) { return variants[i] }
-        return base
-    }
-
-    // MARK: DataSource
-
-    func collectionView(_ c: UICollectionView, numberOfItemsInSection s: Int) -> Int { current.count }
-
-    func collectionView(_ c: UICollectionView, cellForItemAt ip: IndexPath) -> UICollectionViewCell {
-        let cell = c.dequeueReusableCell(withReuseIdentifier: "e", for: ip) as! EmojiCell
-        cell.label.text = displayed(current[ip.item])
-        return cell
-    }
-
-    func collectionView(_ c: UICollectionView, layout: UICollectionViewLayout,
-                        sizeForItemAt ip: IndexPath) -> CGSize {
-        let cols: CGFloat = 8
-        let w = floor(bounds.width / cols)
-        return CGSize(width: w, height: 40)
-    }
-
-    func collectionView(_ c: UICollectionView, didSelectItemAt ip: IndexPath) {
-        insert?(displayed(current[ip.item]))
-    }
-
-    // MARK: Acciones
-
-    @objc private func tapABC() { backToKeys?() }
-    @objc private func delDown() { deleteDown?() }
-    @objc private func delUp() { deleteUp?() }
-    @objc private func tapCategory(_ sender: UIButton) {
-        categoryIndex = sender.tag
-        reloadCurrent()
-    }
-
-    // MARK: Tonos de piel
-    //
-    // Misma mecánica que el globo de acentos de las teclas: mantienes pulsado,
-    // aparece la barra, arrastras sin levantar el dedo y al soltar se inserta
-    // la opción marcada. Antes era un popup de botones que había que tocar
-    // aparte, y encima componía el tono pegando el modificador al final, cosa
-    // que sólo funciona en los emojis simples: en las secuencias con ZWJ
-    // (🧑‍🍳, 👩‍❤️‍👨…) el modificador va detrás de la persona, no al final. Ahora
-    // las variantes salen del catálogo de Unicode ya construidas.
-
-    /// Vibración al abrir el selector y al pasar de un tono a otro. Las pone el
-    /// controlador para respetar el ajuste de vibración en pulsación larga.
-    var onLongPressFeedback: (() -> Void)?
-    var onSelectionFeedback: (() -> Void)?
-
-    private var toneBase: String?
-    private var toneOptions: [String] = []
-    private var toneLabels: [UILabel] = []
-    private var toneBarFrame: CGRect = .zero
-    private var toneIndex = 0
-    private let toneCellWidth: CGFloat = 42
-
-    @objc private func handleLongPress(_ gr: UILongPressGestureRecognizer) {
-        switch gr.state {
-        case .began:
-            let pt = gr.location(in: collection)
-            guard let ip = collection.indexPathForItem(at: pt) else { return }
-            let base = current[ip.item]
-            guard let variants = EmojiCatalog.toneVariants[base],
-                  let cell = collection.cellForItem(at: ip) else { return }
-            openTonePicker(base: base, variants: variants, over: cell)
-        case .changed:
-            guard tonePopup != nil else { return }
-            updateToneSelection(at: gr.location(in: self).x)
-        case .ended:
-            guard tonePopup != nil else { return }
-            commitTone()
-        default:
-            closeTonePicker()
-        }
-    }
-
-    private func openTonePicker(base: String, variants: [String], over cell: UICollectionViewCell) {
-        closeTonePicker()
-        collection.isScrollEnabled = false      // el dedo elige, no desplaza
-        toneBase = base
-        toneOptions = [base] + variants
-
-        let w = CGFloat(toneOptions.count) * toneCellWidth + 8
-        let h: CGFloat = 50
-        let cf = cell.convert(cell.bounds, to: self)
-        var x = cf.midX - w / 2
-        x = min(max(x, 4), max(bounds.width - w - 4, 4))
-        let y = max(cf.minY - h - 4, 2)
-        let bar = UIView(frame: CGRect(x: x, y: y, width: w, height: h))
-        bar.backgroundColor = .systemGray4
-        bar.layer.cornerRadius = 12
-        bar.layer.shadowColor = UIColor.black.cgColor
-        bar.layer.shadowOpacity = 0.25
-        bar.layer.shadowRadius = 5
-        bar.layer.shadowOffset = CGSize(width: 0, height: 2)
-        addSubview(bar)
-
-        toneLabels = []
-        for (i, opt) in toneOptions.enumerated() {
-            let l = UILabel(frame: CGRect(x: 4 + CGFloat(i) * toneCellWidth, y: 5,
-                                          width: toneCellWidth, height: h - 10))
-            l.text = opt
-            l.textAlignment = .center
-            l.font = .systemFont(ofSize: 28)
-            l.layer.cornerRadius = 8
-            l.clipsToBounds = true
-            bar.addSubview(l)
-            toneLabels.append(l)
-        }
-        tonePopup = bar
-        toneBarFrame = bar.frame
-
-        // Arranca marcando el tono que ya tenías elegido para ese emoji.
-        let saved = UserDefaults.standard.dictionary(forKey: tonesKey) as? [String: Int] ?? [:]
-        var start = 0
-        if let i = saved[base], i >= 0, i < variants.count { start = i + 1 }
-        toneIndex = start
-        highlightTone()
-        onLongPressFeedback?()
-    }
-
-    private func updateToneSelection(at x: CGFloat) {
-        guard !toneOptions.isEmpty else { return }
-        let slot = Int(floor((x - toneBarFrame.minX - 4) / toneCellWidth))
-        let clamped = min(max(slot, 0), toneOptions.count - 1)
-        guard clamped != toneIndex else { return }
-        toneIndex = clamped
-        highlightTone()
-        onSelectionFeedback?()
-    }
-
-    private func highlightTone() {
-        for (i, l) in toneLabels.enumerated() {
-            l.backgroundColor = i == toneIndex ? UIColor.tintColor : .clear
-        }
-    }
-
-    private func commitTone() {
-        guard let base = toneBase, toneOptions.indices.contains(toneIndex) else {
-            closeTonePicker()
-            return
-        }
-        let result = toneOptions[toneIndex]
-        var dict = UserDefaults.standard.dictionary(forKey: tonesKey) as? [String: Int] ?? [:]
-        if toneIndex == 0 { dict[base] = nil } else { dict[base] = toneIndex - 1 }
-        UserDefaults.standard.set(dict, forKey: tonesKey)
-        closeTonePicker()
-        insert?(result)
-        EmojiStore.registerRecent(result)
-        collection.reloadData()
-    }
-
-    private func closeTonePicker() {
-        tonePopup?.removeFromSuperview()
-        tonePopup = nil
-        toneLabels = []
-        toneOptions = []
-        toneBase = nil
-        collection.isScrollEnabled = true
-    }
-}
-
-
 // MARK: - Botón de icono con toque directo
 //
 // Los UIButton dentro de una extensión de teclado pueden tragarse el primer
@@ -3642,7 +3774,7 @@ final class IconTouchButton: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         imageView.contentMode = .center
-        imageView.tintColor = .label
+        imageView.tintColor = KeyStyle.theme.text
         imageView.isUserInteractionEnabled = false
         addSubview(imageView)
         layer.cornerRadius = 8
@@ -3660,8 +3792,9 @@ final class IconTouchButton: UIView {
         imageView.image = UIImage(systemName: name,
                                   withConfiguration: UIImage.SymbolConfiguration(pointSize: 19,
                                                                                  weight: .medium))
-        imageView.tintColor = active ? .tintColor : .label
-        backgroundColor = active ? UIColor.tintColor.withAlphaComponent(0.22) : .clear
+        let theme = KeyStyle.theme
+        imageView.tintColor = active ? theme.accent : theme.text
+        backgroundColor = active ? theme.accent.withAlphaComponent(0.22) : .clear
     }
 
     /// Dispara la acción con un destello bien visible.
@@ -3679,7 +3812,7 @@ final class IconTouchButton: UIView {
 
     private func flash() {
         let normal = backgroundColor
-        backgroundColor = UIColor.systemGray2
+        backgroundColor = KeyStyle.theme.functionPressed
         UIView.animate(withDuration: 0.22) { self.backgroundColor = normal }
     }
 

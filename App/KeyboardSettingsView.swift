@@ -17,6 +17,7 @@ struct KeyboardSettingsView: View {
 
     var body: some View {
         Form {
+            themeSection
             designSection
             punctuationSection
             writingSection
@@ -49,6 +50,28 @@ struct KeyboardSettingsView: View {
     }
 
     // MARK: Secciones
+
+    @ViewBuilder private var themeSection: some View {
+        let theme = KeyboardTheme.named(config.theme)
+        Section("Tema") {
+            NavigationLink {
+                KeyboardThemePicker(selection: $config.theme)
+            } label: {
+                HStack(spacing: 12) {
+                    KeyboardThemePreview(theme: theme, showsLabels: false)
+                        .frame(width: 76, height: 48)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(theme.name)
+                        Text(theme.audience)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
 
     @ViewBuilder private var designSection: some View {
         Section("Diseño") {
@@ -160,8 +183,13 @@ struct KeyboardSettingsView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         Section("Pegar desde el teclado") {
+            Toggle("Guardar automáticamente lo que copias", isOn: $config.autoCapture)
+            Text("El teclado guarda en el historial lo que copias en cuanto aparece y, mientras está abierto, cada pocos segundos, sin abrir el portapapeles. iOS no deja a ninguna app leer el portapapeles en segundo plano: lo que copies con el teclado cerrado se guarda la próxima vez que lo abras o que abras ClipDeck.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Cada vez que lo hace, iOS muestra arriba un aviso de que ClipDeck ha pegado desde otra app. Lo pone el sistema siempre que una app lee lo que copiaste en otra, y ninguna app puede ocultarlo. Sólo sale cuando copias algo: cambiar de campo no cuenta. Si prefieres no verlo, desactiva esta opción: lo copiado se guardará cuando abras el portapapeles del teclado o lo pegues con el botón de la barra.")
+                .font(.caption).foregroundStyle(.secondary)
             Toggle("Sugerir pegar lo copiado", isOn: $config.pasteChip)
-            Text("Cuando copias algo nuevo, la barra de sugerencias ofrece «📋 Pegar» durante un minuto y medio; si sigues escribiendo, no vuelve a salir por lo mismo. ClipDeck sólo lee el portapapeles cuando hay algo nuevo. Si iOS pregunta «¿Permitir pegar?», el teclado deja de leerlo por su cuenta y el panel muestra «Pegar lo copiado»; para que no pregunte: Ajustes → ClipDeck → Pegar desde otras apps → Permitir.")
+            Text("Cuando copias algo nuevo, la barra de sugerencias ofrece pegarlo durante un par de minutos; si sigues escribiendo, no vuelve a salir por lo mismo. Si iOS pregunta «¿Permitir pegar?», el teclado deja de leer el portapapeles por su cuenta y el panel muestra «Pegar lo copiado»; para que no pregunte: Ajustes → ClipDeck → Pegar desde otras apps → Permitir.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -225,6 +253,8 @@ struct KeyboardSettingsView: View {
         store.set(config.punctLeft, forKey: KbPrefs.punctLeft)
         store.set(config.punctRight, forKey: KbPrefs.punctRight)
         store.set(config.undoCorrectOnDelete, forKey: KbPrefs.undoCorrectOnDelete)
+        store.set(config.theme, forKey: KbPrefs.theme)
+        store.set(config.autoCapture, forKey: KbPrefs.autoCapture)
         store.set(config.pasteChip, forKey: KbPrefs.pasteChip)
     }
 }

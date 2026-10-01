@@ -1,5 +1,6 @@
 import XCTest
 import SwiftData
+import UIKit
 
 // Las fuentes de `Shared` se compilan dentro de este bundle, así que los tipos
 // se usan directamente sin `@testable import`.
@@ -292,6 +293,101 @@ final class SwipeLexiconTests: XCTestCase {
     }
 }
 
+// MARK: - Temas del teclado
+
+final class KeyboardThemeTests: XCTestCase {
+
+    func testLosIdsNoSeRepiten() {
+        let ids = KeyboardTheme.all.map(\.id)
+        XCTAssertEqual(Set(ids).count, ids.count)
+    }
+
+    func testPorDefectoEsElClasico() {
+        XCTAssertEqual(KeyboardTheme.defaultID, "classic")
+        XCTAssertEqual(KeyboardTheme.named(KeyboardTheme.defaultID).name, "Clásico")
+    }
+
+    func testUnTemaQueYaNoExisteVuelveAlClasico() {
+        XCTAssertEqual(KeyboardTheme.named("tema-borrado").id, KeyboardTheme.defaultID)
+    }
+
+    func testCadaFamiliaTieneTemas() {
+        for family in KeyboardTheme.Family.allCases {
+            XCTAssertFalse(KeyboardTheme.all.filter { $0.family == family }.isEmpty, family.rawValue)
+        }
+    }
+
+    func testLosTemasDeAparienciaFijaNoCambianConElModo() {
+        let light = UITraitCollection(userInterfaceStyle: .light)
+        let dark = UITraitCollection(userInterfaceStyle: .dark)
+        for theme in KeyboardTheme.all where theme.appearance != .system {
+            XCTAssertEqual(theme.letter.resolvedColor(with: light), theme.letter.resolvedColor(with: dark), theme.name)
+            XCTAssertEqual(theme.text.resolvedColor(with: light), theme.text.resolvedColor(with: dark), theme.name)
+        }
+    }
+}
+
+// MARK: - Búsqueda de emojis
+
+final class EmojiSearchTests: XCTestCase {
+
+    private let index = EmojiSearchIndex(data: """
+        😺\tgato sonriendo\tcara sonrisa
+        🐱\tcara de gato\tanimal mascota
+        🐈\tgato\tanimal mascota
+        ❤️\tcorazon rojo\tamor emocion
+        😍\tcara sonriendo con ojos de corazon\tamor sonrisa
+        ☀️\tsol\tbrillante rayos soleado
+        🧴\tbote de crema\tprotector solar
+        🎂\ttarta de cumpleanos|pastel de cumpleanos\tcelebracion dulce
+        🌷\ttulipan\tflor planta
+        """)
+
+    func testPrimeroElQueSeLlamaAsi() {
+        XCTAssertEqual(index.search("gato"), ["🐈", "😺", "🐱"])
+    }
+
+    func testSinTildesNiMayusculas() {
+        XCTAssertEqual(index.search("CORAZÓN").first, "❤️")
+    }
+
+    func testPalabrasAMedioEscribir() {
+        XCTAssertEqual(Set(index.search("gat")), ["😺", "🐱", "🐈"])
+        XCTAssertEqual(index.search("corazon roj"), ["❤️"])
+    }
+
+    func testLasPalabrasVaciasNoHacenFalta() {
+        XCTAssertEqual(index.search("cara de gato").first, "🐱")
+        XCTAssertEqual(index.search("cara gato"), ["🐱", "😺"])
+    }
+
+    func testLaPalabraExactaVaAntesQueLaQueEmpiezaIgual() {
+        XCTAssertEqual(index.search("sol"), ["☀️", "🧴"])
+    }
+
+    func testPluralesYVariantesDelEspanol() {
+        XCTAssertEqual(index.search("flores"), ["🌷"])
+        XCTAssertEqual(index.search("gatos").first, "🐈")
+        XCTAssertEqual(index.search("pastel"), ["🎂"])
+    }
+
+    func testSinResultadosYConsultaVacia() {
+        XCTAssertTrue(index.search("xyz").isEmpty)
+        XCTAssertTrue(index.search("   ").isEmpty)
+    }
+
+    func testLaEñeEsOtraLetra() {
+        let words = EmojiSearchIndex(data: "🐒\tmono\n🎀\tlazo|moño")
+        XCTAssertEqual(words.search("mono"), ["🐒"])
+        XCTAssertEqual(words.search("MOÑO"), ["🎀"])
+    }
+
+    func testLoQueNoSeSabeDibujarNoSale() {
+        let filtered = EmojiSearchIndex(data: "🐈\tgato\n😺\tgato sonriendo", excluding: ["🐈"])
+        XCTAssertEqual(filtered.search("gato"), ["😺"])
+    }
+}
+
 // MARK: - Cuándo leer el portapapeles
 
 final class PasteboardWatchTests: XCTestCase {
@@ -326,6 +422,33 @@ final class PasteboardWatchTests: XCTestCase {
         let types = plainText + [PasteboardWatch.ownType]
         XCTAssertEqual(PasteboardWatch.classify(count: 14, itemCount: 1, types: types, last: last), .own)
         XCTAssertFalse(PasteboardWatch.shouldAutoRead(.own, askMode: false))
+    }
+
+    func testElCambioDeCampoNoEsUnaCopia() {
+        let seen = PasteboardSighting(count: 10, signature: plainSignature)
+        // iOS sube el contador de dos en dos al tomar el foco un campo.
+        XCTAssertFalse(PasteboardWatch.contentMayHaveChanged(
+            from: seen, to: PasteboardSighting(count: 12, signature: plainSignature)))
+        XCTAssertFalse(PasteboardWatch.contentMayHaveChanged(
+            from: seen, to: PasteboardSighting(count: 14, signature: plainSignature)))
+        XCTAssertFalse(PasteboardWatch.contentMayHaveChanged(from: seen, to: seen))
+    }
+
+    func testUnaCopiaSeNotaAunqueTengaLosMismosTipos() {
+        let seen = PasteboardSighting(count: 10, signature: plainSignature)
+        XCTAssertTrue(PasteboardWatch.contentMayHaveChanged(
+            from: seen, to: PasteboardSighting(count: 11, signature: plainSignature)))
+        // Copia y cambio de campo antes de mirar.
+        XCTAssertTrue(PasteboardWatch.contentMayHaveChanged(
+            from: seen, to: PasteboardSighting(count: 13, signature: plainSignature)))
+        // Otros tipos, o el contador empezó de cero (reinicio).
+        let image = PasteboardWatch.signature(itemCount: 1, types: ["public.png"])
+        XCTAssertTrue(PasteboardWatch.contentMayHaveChanged(
+            from: seen, to: PasteboardSighting(count: 12, signature: image)))
+        XCTAssertTrue(PasteboardWatch.contentMayHaveChanged(
+            from: seen, to: PasteboardSighting(count: 2, signature: plainSignature)))
+        XCTAssertTrue(PasteboardWatch.contentMayHaveChanged(
+            from: nil, to: PasteboardSighting(count: 2, signature: plainSignature)))
     }
 
     func testElOrdenDeLosTiposNoImporta() {

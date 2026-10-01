@@ -39,6 +39,13 @@ struct PasteboardMark: Equatable {
     var contentHash: String?
 }
 
+/// Lo que el teclado vio del portapapeles la última vez que lo miró, sin
+/// leerlo: el contador y los tipos (`PasteboardWatch.signature`).
+struct PasteboardSighting: Equatable {
+    var count: Int
+    var signature: String
+}
+
 enum PasteboardWatch {
 
     /// Tipo propio que ClipDeck añade a lo que copia. Ninguna app lo entiende,
@@ -69,6 +76,22 @@ enum PasteboardWatch {
         if types.contains(ownType) { return .own }
         guard let last, !last.signature.isEmpty else { return .newKind }
         return signature(itemCount: itemCount, types: types) == last.signature ? .sameKind : .newKind
+    }
+
+    /// ¿Pudo cambiar lo copiado entre dos vistazos? Cada vez que un campo de
+    /// texto toma el foco, iOS sube el contador de dos en dos sin tocar lo
+    /// copiado: escribe y borra una imagen para ver si se pueden pegar Memojis
+    /// (desde iOS 13; developer.apple.com/forums/thread/131419). Una copia lo
+    /// sube de uno en uno. Con los mismos tipos y una subida par, lo copiado
+    /// es lo de antes, y leerlo sólo sacaría el aviso de iOS. Dos copias
+    /// seguidas sin mirar entre medias también suben dos, pero es raro, y lo
+    /// último copiado lo recoge igual el panel al abrirse.
+    static func contentMayHaveChanged(from old: PasteboardSighting?, to new: PasteboardSighting) -> Bool {
+        guard let old else { return true }
+        guard new.count != old.count else { return false }
+        if new.signature != old.signature { return true }
+        let rise = new.count - old.count
+        return rise < 0 || rise % 2 != 0
     }
 
     /// ¿Leer sin que el usuario lo pida? Con «Pegar desde otras apps» en
