@@ -40,8 +40,7 @@ enum SmartCorrector {
         // Si la palabra existe tal cual en algún idioma, no se toca.
         if isSpelledCorrectly(word) { return nil }
 
-        let lex = SwipeLexicon.shared
-        guard lex.isLoaded, lex.count > 0 else { return nil }
+        guard let lex = SwipeLexicon.shared.snapshot, lex.count > 0 else { return nil }
 
         var typedMask: UInt32 = 0
         for i in typed { typedMask |= (UInt32(1) << UInt32(i)) }
@@ -176,7 +175,7 @@ enum SmartCorrector {
     private static func isSpelledCorrectly(_ word: String) -> Bool {
         let checker = KeyboardViewController.sharedChecker
         let range = NSRange(location: 0, length: word.utf16.count)
-        for language in ["es_ES", "en_US"] {
+        for language in KeyboardViewController.checkerLanguages {
             let m = checker.rangeOfMisspelledWord(in: word, range: range,
                                                   startingAt: 0, wrap: false, language: language)
             if m.location == NSNotFound { return true }

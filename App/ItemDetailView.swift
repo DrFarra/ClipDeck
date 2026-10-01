@@ -132,9 +132,7 @@ struct ItemDetailView: View {
         case .link:
             VStack(alignment: .leading, spacing: 10) {
                 if let data = item.previewImageData, let uiImage = UIImage(data: data) {
-                    Image(uiImage: uiImage)
-                        .resizable()
-                        .scaledToFill()
+                    FillImage(image: uiImage)
                         .frame(maxWidth: .infinity)
                         .frame(height: 150)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -184,7 +182,7 @@ struct ItemDetailView: View {
                     Text(hex).font(.headline.monospaced())
                     Spacer()
                     Button("Copiar hex") {
-                        UIPasteboard.general.string = hex
+                        PasteboardWatch.copy(text: hex)
                         Haptics.light()
                     }
                     .buttonStyle(.bordered)

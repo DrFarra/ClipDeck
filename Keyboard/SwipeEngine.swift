@@ -25,8 +25,9 @@ enum SwipeRecognizer {
                           pitch: CGFloat,
                           limit: Int = 4) -> [String] {
 
-        let lex = SwipeLexicon.shared
-        guard lex.isLoaded, pitch > 1 else { return [] }
+        // Una sola instantánea para todo el cálculo: los arrays siempre
+        // concuerdan entre sí aunque otro hilo recargue el vocabulario.
+        guard let lex = SwipeLexicon.shared.snapshot, pitch > 1 else { return [] }
 
         let path = simplify(raw)
         guard path.count >= 3 else { return [] }

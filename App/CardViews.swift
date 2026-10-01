@@ -106,9 +106,7 @@ struct ClipCardView: View {
 
     @ViewBuilder private var imageBody: some View {
         if let data = item.assetData, let uiImage = UIImage(data: data) {
-            Image(uiImage: uiImage)
-                .resizable()
-                .scaledToFill()
+            FillImage(image: uiImage)
                 .frame(maxWidth: .infinity)
                 .frame(height: imageHeight)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -128,9 +126,7 @@ struct ClipCardView: View {
     @ViewBuilder private var linkBody: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let data = item.previewImageData, let uiImage = UIImage(data: data) {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .scaledToFill()
+                FillImage(image: uiImage)
                     .frame(maxWidth: .infinity)
                     .frame(height: 110)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -216,28 +212,39 @@ struct ClipCardView: View {
 // MARK: - Copiado al portapapeles
 
 enum ClipboardWriter {
-    /// Vuelve a colocar un elemento en el portapapeles del sistema.
+    /// Vuelve a colocar un elemento en el portapapeles del sistema, con la
+    /// marca de ClipDeck para que no vuelva a entrar al historial.
     static func copy(_ item: ClipItem, asPlainText: Bool = false) {
-        let pasteboard = UIPasteboard.general
         switch item.type {
         case .image:
-            if let data = item.assetData, let image = UIImage(data: data), !asPlainText {
-                pasteboard.image = image
+            if let data = item.assetData, !asPlainText {
+                PasteboardWatch.copy(imageRepresentations(data))
             } else if let text = item.recognizedText {
-                pasteboard.string = text
+                PasteboardWatch.copy(text: text)
             }
         case .file:
             if let data = item.assetData {
                 let type = item.fileName.flatMap { UTType(filenameExtension: ($0 as NSString).pathExtension) } ?? .data
-                pasteboard.setData(data, forPasteboardType: type.identifier)
+                PasteboardWatch.copy([type.identifier: data])
             }
         case .link:
-            pasteboard.string = item.urlString ?? item.plainText ?? ""
+            PasteboardWatch.copy(text: item.urlString ?? item.plainText ?? "")
         default:
-            pasteboard.string = item.plainText ?? ""
+            PasteboardWatch.copy(text: item.plainText ?? "")
         }
         item.lastUsedAt = .now
-        // Evita que la app recapture su propia copia.
-        AppGroup.sharedDefaults.set(pasteboard.changeCount, forKey: SettingsKeys.lastPasteboardChange)
+    }
+
+    /// PNG, JPEG y GIF van tal cual; lo demás (HEIC, TIFF) se convierte para
+    /// que cualquier app pueda pegarlo.
+    private static func imageRepresentations(_ data: Data) -> [String: Any] {
+        let common = [UTType.png, .jpeg, .gif].map(\.identifier)
+        if let type = ImageTools.typeIdentifier(of: data), common.contains(type) {
+            return [type: data]
+        }
+        if let image = UIImage(data: data), let jpeg = image.jpegData(compressionQuality: 0.9) {
+            return [UTType.jpeg.identifier: jpeg]
+        }
+        return [ImageTools.typeIdentifier(of: data) ?? UTType.image.identifier: data]
     }
 }

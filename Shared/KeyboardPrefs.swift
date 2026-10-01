@@ -28,6 +28,10 @@ enum KbPrefs {
     static let trackpadChars   = "kb.trackpadLineChars"    // ancho de línea estimado
     static let punctLeft       = "kb.punctLeft"
     static let punctRight      = "kb.punctRight"
+    static let undoCorrectOnDelete = "kb.undoCorrectOnDelete"
+    static let theme           = "kb.theme"             // id de KeyboardTheme
+    static let autoCapture     = "kb.autoCapture"       // guardar lo copiado sin abrir el panel
+    static let pasteChip       = "kb.pasteChip"
 
     static func double(_ key: String, default def: Double) -> Double {
         store.object(forKey: key) as? Double ?? def
@@ -60,6 +64,14 @@ enum KbPrefs {
         var trackpadChars: Double
         var punctLeft: String
         var punctRight: String
+        /// Borrar justo después de una autocorrección la deshace (como Gboard).
+        var undoCorrectOnDelete: Bool
+        var theme: String
+        /// El teclado guarda en el historial lo que se copia sin esperar a que
+        /// se abra el panel del portapapeles.
+        var autoCapture: Bool
+        /// La barra ofrece pegar lo recién copiado.
+        var pasteChip: Bool
 
         static func load() -> Config {
             Config(height: KbPrefs.double(KbPrefs.height, default: 330),
@@ -83,7 +95,11 @@ enum KbPrefs {
                    trackpadStepY: KbPrefs.double(KbPrefs.trackpadStepY, default: 22),
                    trackpadChars: KbPrefs.double(KbPrefs.trackpadChars, default: 38),
                    punctLeft: KbPrefs.store.string(forKey: KbPrefs.punctLeft) ?? ",",
-                   punctRight: KbPrefs.store.string(forKey: KbPrefs.punctRight) ?? ".")
+                   punctRight: KbPrefs.store.string(forKey: KbPrefs.punctRight) ?? ".",
+                   undoCorrectOnDelete: KbPrefs.bool(KbPrefs.undoCorrectOnDelete, default: true),
+                   theme: KbPrefs.store.string(forKey: KbPrefs.theme) ?? KeyboardTheme.defaultID,
+                   autoCapture: KbPrefs.bool(KbPrefs.autoCapture, default: true),
+                   pasteChip: KbPrefs.bool(KbPrefs.pasteChip, default: true))
         }
     }
 }
@@ -94,6 +110,13 @@ enum WordLearner {
     static let wordsKey = "kb.learnedWords"     // [palabra: frecuencia]
     static let bigramsKey = "kb.learnedBigrams" // ["prev next": frecuencia]
     static let blockedKey = "kb.blockedWords"   // palabras que el usuario no quiere ver
+    static let protectedKey = "kb.protectedWords" // no se autocorrigen (corrección deshecha)
+
+    /// Usos para dar una palabra por buena. Con uno solo, cualquier errata que
+    /// se escapara del corrector quedaba «aprendida»: ya no se corregía nunca
+    /// y además se proponía al escribir (la queja de iOS 26.4, que obligó a
+    /// borrar el diccionario del teclado).
+    static let minUses = 2
 
     // MARK: Caché en memoria
     //
@@ -106,6 +129,7 @@ enum WordLearner {
     private static var wordsCache: [String: Int]?
     private static var bigramsCache: [String: Int]?
     private static var blockedCache: Set<String>?
+    private static var protectedCache: Set<String>?
     private static var wordsDirty = false
     private static var bigramsDirty = false
     private static var flushScheduled = false
@@ -153,7 +177,31 @@ enum WordLearner {
         wordsCache = nil
         bigramsCache = nil
         blockedCache = nil
+        protectedCache = nil
         lock.unlock()
+    }
+
+    /// Con el lock tomado.
+    private static func protectedSet() -> Set<String> {
+        if let c = protectedCache { return c }
+        let set = Set(KbPrefs.store.stringArray(forKey: protectedKey) ?? [])
+        protectedCache = set
+        return set
+    }
+
+    /// El usuario deshizo la corrección de esta palabra: no se vuelve a
+    /// corregir, pero tampoco pasa a proponerse (puede ser un nombre o algo
+    /// escrito así a propósito).
+    static func protect(_ word: String) {
+        let clean = word.lowercased()
+        guard !clean.isEmpty, clean.count <= 24 else { return }
+        lock.lock()
+        var set = protectedSet()
+        let inserted = set.insert(clean).inserted
+        if set.count > 500 { set = Set(set.prefix(400)) }
+        protectedCache = set
+        lock.unlock()
+        if inserted { KbPrefs.store.set(Array(set), forKey: protectedKey) }
     }
 
     static func blockedWords() -> Set<String> {
@@ -182,8 +230,12 @@ enum WordLearner {
         var blocked = blockedCache ?? Set(KbPrefs.store.stringArray(forKey: blockedKey) ?? [])
         blocked.insert(clean)
         blockedCache = blocked
+        var protected = protectedSet()
+        let wasProtected = protected.remove(clean) != nil
+        protectedCache = protected
         lock.unlock()
         KbPrefs.store.set(Array(blocked.prefix(400)), forKey: blockedKey)
+        if wasProtected { KbPrefs.store.set(Array(protected), forKey: protectedKey) }
         flush()
     }
 
@@ -192,9 +244,12 @@ enum WordLearner {
         return wordsDict()
     }
 
+    /// Palabra que no hay que corregir: usada varias veces, o cuya
+    /// corrección el usuario deshizo.
     static func isKnown(_ word: String) -> Bool {
+        let clean = word.lowercased()
         lock.lock(); defer { lock.unlock() }
-        return wordsDict()[word.lowercased()] != nil
+        return (wordsDict()[clean] ?? 0) >= minUses || protectedSet().contains(clean)
     }
 
     static func learn(_ word: String) {
@@ -256,7 +311,8 @@ enum WordLearner {
         let all = wordsDict()
         lock.unlock()
         return all
-            .filter { $0.key.hasPrefix(lower) && $0.key != lower && !blocked.contains($0.key) }
+            .filter { $0.value >= minUses && $0.key.hasPrefix(lower) && $0.key != lower
+                      && !blocked.contains($0.key) }
             .sorted { $0.value > $1.value }
             .prefix(limit)
             .map { $0.key }
@@ -266,11 +322,13 @@ enum WordLearner {
         lock.lock()
         wordsCache = [:]
         bigramsCache = [:]
+        protectedCache = []
         wordsDirty = false
         bigramsDirty = false
         lock.unlock()
         KbPrefs.store.removeObject(forKey: wordsKey)
         KbPrefs.store.removeObject(forKey: bigramsKey)
+        KbPrefs.store.removeObject(forKey: protectedKey)
     }
 
     // MARK: Gestión manual (pantalla de palabras aprendidas)
