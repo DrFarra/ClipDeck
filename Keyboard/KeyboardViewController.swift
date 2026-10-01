@@ -1881,7 +1881,7 @@ final class KeyboardViewController: UIInputViewController {
             self.pasteTask = nil
             self.pasteWaiting = false
             let paused = AppGroup.sharedDefaults.bool(forKey: SettingsKeys.capturePaused)
-            func keep() {
+            @MainActor func keep() {
                 // Queda también en el historial (salvo con la captura en pausa).
                 guard let container, !paused else {
                     PasteboardWatch.markSeen(contentHash: nil)

@@ -357,19 +357,10 @@ final class PasteboardWatchTests: XCTestCase {
 @MainActor
 final class CaptureIngestTests: XCTestCase {
 
-    override func setUp() {
-        super.setUp()
-        PasteboardWatch.lastMark = nil
-        PasteboardWatch.askMode = false
-    }
-
-    override func tearDown() {
-        PasteboardWatch.lastMark = nil
-        PasteboardWatch.askMode = false
-        super.tearDown()
-    }
-
+    /// Base vacía y sin nada anotado del portapapeles.
     private func makeContext() throws -> ModelContext {
+        PasteboardWatch.lastMark = nil
+        PasteboardWatch.askMode = false
         let config = ModelConfiguration(schema: ClipStore.schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: ClipStore.schema, configurations: [config])
         return ModelContext(container)

@@ -50,7 +50,10 @@ enum PasteboardWatch {
 
     static let signatureKey = "capture.lastSignature"
     static let hashKey = "capture.lastContentHash"
+    /// La app y el teclado llevan la cuenta por separado: iOS puede preguntar
+    /// a uno y no al otro, y la app no debe dejar de capturar por el teclado.
     static let askModeKey = "capture.askMode"
+    static let keyboardAskModeKey = "capture.askMode.keyboard"
     /// El usuario cerró la explicación de la app sobre «Pegar desde otras apps».
     static let askTipDismissedKey = "capture.askTipDismissed"
 
@@ -123,9 +126,12 @@ enum PasteboardWatch {
     /// iOS pregunta antes de cada lectura: «Pegar desde otras apps» está en
     /// Preguntar, o el usuario tocó «No permitir».
     static var askMode: Bool {
-        get { defaults.bool(forKey: askModeKey) }
-        set { defaults.set(newValue, forKey: askModeKey) }
+        get { defaults.bool(forKey: ownAskModeKey) }
+        set { defaults.set(newValue, forKey: ownAskModeKey) }
     }
+
+    private static let ownAskModeKey =
+        Bundle.main.bundleURL.pathExtension == "appex" ? keyboardAskModeKey : askModeKey
 
     #if canImport(UIKit)
 
