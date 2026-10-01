@@ -43,6 +43,9 @@ struct OnboardingView: View {
                         text: "En Ajustes de ClipDeck pon «Pegar de otras apps» en Permitir para que iOS no pregunte cada vez. Todo se guarda solo en tu dispositivo; puedes activar Face ID cuando quieras.",
                         buttonTitle: "Abrir Ajustes y terminar",
                         buttonAction: {
+                            // Al volver se prueba a leer solo: si quedó en
+                            // Permitir, iOS ya no pregunta.
+                            PasteboardWatch.askMode = false
                             openSettings()
                             hasOnboarded = true
                         }

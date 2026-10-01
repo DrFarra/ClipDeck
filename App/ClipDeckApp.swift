@@ -57,7 +57,11 @@ struct ClipDeckApp: App {
                 }
                 needsUnlockOnActivate = false
                 let context = container.mainContext
-                CaptureService.captureIfNeeded(context: context)
+                // Antes de terminar la presentación no se lee nada: lo primero
+                // que vería alguien nuevo sería la alerta «¿Permitir pegar?».
+                if hasOnboarded {
+                    Task { await CaptureService.autoCapture(context: context) }
+                }
                 CaptureService.purgeExpired(context: context)
                 // OCR y vistas previas de lo que se capturó desde el teclado.
                 CaptureService.processPending(context: context)

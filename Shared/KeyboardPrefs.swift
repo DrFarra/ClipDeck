@@ -31,6 +31,7 @@ enum KbPrefs {
     static let undoCorrectOnDelete = "kb.undoCorrectOnDelete"
     static let theme           = "kb.theme"             // id de KeyboardTheme
     static let autoCapture     = "kb.autoCapture"       // guardar lo copiado sin abrir el panel
+    static let pasteChip       = "kb.pasteChip"
 
     static func double(_ key: String, default def: Double) -> Double {
         store.object(forKey: key) as? Double ?? def
@@ -69,6 +70,8 @@ enum KbPrefs {
         /// El teclado guarda en el historial lo que se copia sin esperar a que
         /// se abra el panel del portapapeles.
         var autoCapture: Bool
+        /// La barra ofrece pegar lo recién copiado.
+        var pasteChip: Bool
 
         static func load() -> Config {
             Config(height: KbPrefs.double(KbPrefs.height, default: 330),
@@ -95,7 +98,8 @@ enum KbPrefs {
                    punctRight: KbPrefs.store.string(forKey: KbPrefs.punctRight) ?? ".",
                    undoCorrectOnDelete: KbPrefs.bool(KbPrefs.undoCorrectOnDelete, default: true),
                    theme: KbPrefs.store.string(forKey: KbPrefs.theme) ?? KeyboardTheme.defaultID,
-                   autoCapture: KbPrefs.bool(KbPrefs.autoCapture, default: true))
+                   autoCapture: KbPrefs.bool(KbPrefs.autoCapture, default: true),
+                   pasteChip: KbPrefs.bool(KbPrefs.pasteChip, default: true))
         }
     }
 }

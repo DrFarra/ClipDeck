@@ -1,5 +1,7 @@
 import SwiftUI
 import SwiftData
+import UIKit
+import UniformTypeIdentifiers
 
 enum HistorySource: Hashable {
     case clipboard
@@ -17,6 +19,8 @@ struct HistoryView: View {
 
     @AppStorage(SettingsKeys.capturePaused, store: AppGroup.sharedDefaults) private var capturePaused = false
     @AppStorage(SettingsKeys.confirmDelete, store: AppGroup.sharedDefaults) private var confirmDelete = true
+    @AppStorage(PasteboardWatch.askModeKey, store: AppGroup.sharedDefaults) private var askMode = false
+    @AppStorage(PasteboardWatch.askTipDismissedKey, store: AppGroup.sharedDefaults) private var askTipDismissed = false
 
     @State private var source: HistorySource = .clipboard
     @State private var selectionMode = false
@@ -124,9 +128,12 @@ struct HistoryView: View {
     private var masonryGrid: some View {
         ScrollView {
             let columns = distributeInColumns(filteredItems)
-            HStack(alignment: .top, spacing: 10) {
-                column(for: columns.0)
-                column(for: columns.1)
+            VStack(spacing: 10) {
+                if showAskCard { askModeCard }
+                HStack(alignment: .top, spacing: 10) {
+                    column(for: columns.0)
+                    column(for: columns.1)
+                }
             }
             .padding(.horizontal, 14)
             .padding(.top, 8)
@@ -281,45 +288,60 @@ struct HistoryView: View {
 
     private var floatingBar: some View {
         HStack(spacing: 12) {
-            Button { showSearch = true } label: {
-                Image(systemName: "magnifyingglass")
-                    .font(.title3)
-                    .frame(width: 50, height: 50)
-                    .liquidGlass(in: Circle())
-            }
+            HStack(spacing: 12) {
+                Button { showSearch = true } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.title3)
+                        .frame(width: 50, height: 50)
+                        .liquidGlass(in: Circle())
+                }
 
-            Button { showSourcePicker = true } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "clock.arrow.circlepath")
-                    Text(sourceTitle)
-                        .font(.subheadline.weight(.medium))
-                        .lineLimit(1)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption2)
+                Button { showSourcePicker = true } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "clock.arrow.circlepath")
+                        Text(sourceTitle)
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2)
+                    }
+                    .padding(.horizontal, 18)
+                    .frame(height: 50)
+                    .liquidGlass(in: Capsule())
                 }
-                .padding(.horizontal, 18)
-                .frame(height: 50)
-                .liquidGlass(in: Capsule())
-            }
 
-            Menu {
-                Button { showNewText = true } label: {
-                    Label("Nueva entrada de texto", systemImage: "square.and.pencil")
+                Menu {
+                    Button { showNewText = true } label: {
+                        Label("Nueva entrada de texto", systemImage: "square.and.pencil")
+                    }
+                    Button { pasteCurrent() } label: {
+                        Label("Pegar del portapapeles", systemImage: "doc.on.clipboard")
+                    }
+                    Button { showNewPinboard = true } label: {
+                        Label("Crear pinboard", systemImage: "pin")
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.title3)
+                        .frame(width: 50, height: 50)
+                        .liquidGlass(in: Circle())
                 }
-                Button { pasteCurrent() } label: {
-                    Label("Pegar del portapapeles", systemImage: "doc.on.clipboard")
+            }
+            .foregroundStyle(Theme.textPrimary)
+
+            // Mientras iOS pregunte antes de cada lectura, el botón Pegar del
+            // sistema queda a mano: con él no pregunta. Va fuera del estilo de
+            // los demás: iOS no lo deja usar si se altera su aspecto.
+            if askMode {
+                PasteButton(supportedContentTypes: Self.pasteTypes) { providers in
+                    Task { await paste(providers) }
                 }
-                Button { showNewPinboard = true } label: {
-                    Label("Crear pinboard", systemImage: "pin")
-                }
-            } label: {
-                Image(systemName: "plus")
-                    .font(.title3)
-                    .frame(width: 50, height: 50)
-                    .liquidGlass(in: Circle())
+                .labelStyle(.iconOnly)
+                .buttonBorderShape(.circle)
+                .controlSize(.large)
+                .tint(Theme.accent)
             }
         }
-        .foregroundStyle(Theme.textPrimary)
         .padding(.horizontal, 16)
         .padding(.bottom, 6)
     }
@@ -364,6 +386,11 @@ struct HistoryView: View {
 
     private var emptyState: some View {
         VStack(spacing: 12) {
+            if showAskCard {
+                askModeCard
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 12)
+            }
             Image(systemName: source == .clipboard ? "doc.on.clipboard" : "pin")
                 .font(.system(size: 40))
                 .foregroundStyle(Theme.textSecondary)
@@ -377,23 +404,94 @@ struct HistoryView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
             if source == .clipboard {
-                Button("Pegar del portapapeles") { pasteCurrent() }
-                    .buttonStyle(.borderedProminent)
-                    .padding(.top, 8)
+                // El botón del sistema: iOS no pregunta «¿Permitir pegar?».
+                PasteButton(supportedContentTypes: Self.pasteTypes) { providers in
+                    Task { await paste(providers) }
+                }
+                .buttonBorderShape(.capsule)
+                .padding(.top, 8)
             }
         }
     }
 
+    // MARK: iOS pregunta antes de pegar
+
+    private static let pasteTypes: [UTType] = [.image, .url, .plainText]
+
+    private var showAskCard: Bool {
+        askMode && !askTipDismissed && source == .clipboard && !selectionMode
+    }
+
+    /// Con «Pegar desde otras apps» en Preguntar, cada lectura saca la alerta
+    /// de iOS. Entonces ClipDeck deja de leer por su cuenta y lo explica aquí.
+    private var askModeCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "hand.raised.fill")
+                    .foregroundStyle(Theme.accent)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("iOS pregunta antes de cada pegado")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Para no molestarte, ClipDeck ya no lee lo que copias por su cuenta: toca Pegar para guardarlo. Si prefieres que se guarde solo, en Ajustes → ClipDeck → Pegar desde otras apps elige «Permitir».")
+                        .font(.footnote)
+                        .foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Button { withAnimation { askTipDismissed = true } } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(width: 28, height: 28)
+                }
+                .accessibilityLabel("Cerrar")
+            }
+            HStack(spacing: 10) {
+                PasteButton(supportedContentTypes: Self.pasteTypes) { providers in
+                    Task { await paste(providers) }
+                }
+                .buttonBorderShape(.capsule)
+                Button("Abrir Ajustes") { openAppSettings() }
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.capsule)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func openAppSettings() {
+        // Al volver se prueba de nuevo a leer solo: si sigue en Preguntar,
+        // iOS preguntará una vez y ClipDeck volverá a esperar al botón.
+        askMode = false
+        if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+    }
+
     // MARK: Acciones
 
+    /// «Pegar del portapapeles» del menú: lo pidió el usuario, así que se lee
+    /// aunque iOS vaya a preguntar.
     private func pasteCurrent() {
-        // Fuerza una captura aunque el changeCount no haya variado.
-        AppGroup.sharedDefaults.set(-1, forKey: SettingsKeys.lastPasteboardChange)
-        switch CaptureService.captureIfNeeded(context: modelContext) {
+        Task {
+            let reading = await CaptureService.readPasteboard(lightweight: false)
+            report(CaptureService.ingest(reading, context: modelContext, lightweight: false,
+                                         userInitiated: true))
+        }
+    }
+
+    private func paste(_ providers: [NSItemProvider]) async {
+        report(await CaptureService.save(pasted: providers, context: modelContext))
+    }
+
+    private func report(_ outcome: CaptureService.Outcome) {
+        switch outcome {
         case .saved: showToast("Guardado")
-        case .duplicate: showToast("Ya estaba guardado")
+        case .duplicate, .unchanged: showToast("Ya estaba guardado")
         case .ignored: showToast("Ignorado por tus reglas")
         case .empty: showToast("El portapapeles está vacío")
+        case .denied: showToast("iOS no dejó leer lo copiado")
+        case .waitingForUser: break
         }
     }
 
