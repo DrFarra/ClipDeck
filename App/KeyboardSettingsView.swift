@@ -160,7 +160,8 @@ struct KeyboardSettingsView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         Section("Pegar desde el teclado") {
-            Text("Cuando copias algo, la barra de sugerencias ofrece «📋 Pegar» durante un par de minutos. Para que iOS no pregunte «¿Permitir pegar?» cada vez: Ajustes → ClipDeck → Pegar desde otras apps → Permitir.")
+            Toggle("Sugerir pegar lo copiado", isOn: $config.pasteChip)
+            Text("Cuando copias algo nuevo, la barra de sugerencias ofrece «📋 Pegar» durante un minuto y medio; si sigues escribiendo, no vuelve a salir por lo mismo. ClipDeck sólo lee el portapapeles cuando hay algo nuevo. Si iOS pregunta «¿Permitir pegar?», el teclado deja de leerlo por su cuenta y el panel muestra «Pegar lo copiado»; para que no pregunte: Ajustes → ClipDeck → Pegar desde otras apps → Permitir.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -224,5 +225,6 @@ struct KeyboardSettingsView: View {
         store.set(config.punctLeft, forKey: KbPrefs.punctLeft)
         store.set(config.punctRight, forKey: KbPrefs.punctRight)
         store.set(config.undoCorrectOnDelete, forKey: KbPrefs.undoCorrectOnDelete)
+        store.set(config.pasteChip, forKey: KbPrefs.pasteChip)
     }
 }

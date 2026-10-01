@@ -57,7 +57,7 @@ struct ClipDeckApp: App {
                 }
                 needsUnlockOnActivate = false
                 let context = container.mainContext
-                CaptureService.captureIfNeeded(context: context)
+                Task { await CaptureService.autoCapture(context: context) }
                 CaptureService.purgeExpired(context: context)
                 // OCR y vistas previas de lo que se capturó desde el teclado.
                 CaptureService.processPending(context: context)

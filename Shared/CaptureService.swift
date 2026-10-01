@@ -16,8 +16,21 @@ enum CaptureService {
         case duplicate(ClipItem)
         case ignored
         case empty
+        /// Lo mismo que la última vez, o lo copió ClipDeck: no se toca nada.
+        case unchanged
+        /// Puede haber algo nuevo, pero leerlo haría que iOS preguntara: se
+        /// espera a que el usuario toque Pegar.
+        case waitingForUser
+        /// iOS no lo dio: el usuario tocó «No permitir».
+        case denied
     }
 
+    /// Captura automática: al abrir la app o el panel del teclado.
+    ///
+    /// Sólo lee si puede haber algo nuevo (`PasteboardWatch`) y si iOS no va a
+    /// preguntar. La lectura va en segundo plano porque se queda esperando
+    /// mientras iOS muestra su alerta.
+    ///
     /// - Parameter lightweight: modo para el teclado. Una extensión de teclado
     ///   tiene un límite de memoria muy bajo (unas decenas de MB) y si lo pasa
     ///   iOS la cierra sin avisar y vuelve al teclado del sistema. Decodificar
@@ -26,50 +39,137 @@ enum CaptureService {
     ///   imagen se guarda tal cual viene, sin decodificarla, y el OCR y los
     ///   metadatos los completa la app después (`processPending`).
     @discardableResult
-    static func captureIfNeeded(context: ModelContext, lightweight: Bool = false) -> Outcome {
-        let pasteboard = UIPasteboard.general
-        let defaults = AppGroup.sharedDefaults
-
-        // Evitar relecturas del mismo contenido (y el aviso de pegado repetido).
-        let lastCount = defaults.integer(forKey: SettingsKeys.lastPasteboardChange)
-        guard pasteboard.changeCount != lastCount else { return .empty }
-        defaults.set(pasteboard.changeCount, forKey: SettingsKeys.lastPasteboardChange)
-
-        guard !defaults.bool(forKey: SettingsKeys.capturePaused) else { return .ignored }
-
-        if pasteboard.hasImages {
-            let saveImages = defaults.object(forKey: SettingsKeys.saveImages) as? Bool ?? true
-            guard saveImages else { return .ignored }
-            if lightweight {
-                guard let raw = rawImageData(from: pasteboard) else { return .ignored }
-                return saveImage(data: raw, size: ImageTools.pixelSize(of: raw), context: context, lightweight: true)
-            }
-            guard let image = pasteboard.image,
-                  let data = image.jpegData(compressionQuality: 0.9) else { return .ignored }
-            return saveImage(data: data, size: image.size, context: context)
+    static func autoCapture(context: ModelContext, lightweight: Bool = false) async -> Outcome {
+        let change = PasteboardWatch.currentChange()
+        switch change {
+        case .none:
+            return .unchanged
+        case .own:
+            PasteboardWatch.markSeen(contentHash: nil)
+            return .unchanged
+        case .sameKind, .newKind:
+            break
         }
-
-        if pasteboard.hasURLs, let url = pasteboard.url {
-            return saveText(url.absoluteString, context: context, lightweight: lightweight)
+        if AppGroup.sharedDefaults.bool(forKey: SettingsKeys.capturePaused) {
+            // Lo copiado mientras tanto no entra al reanudar.
+            PasteboardWatch.markSeen(contentHash: PasteboardWatch.lastMark?.contentHash)
+            return .ignored
         }
-
-        if pasteboard.hasStrings, let text = pasteboard.string {
-            return saveText(text, context: context, lightweight: lightweight)
+        guard PasteboardWatch.shouldAutoRead(change, askMode: PasteboardWatch.askMode) else {
+            return .waitingForUser
         }
-
-        return .empty
+        let reading = await readPasteboard(lightweight: lightweight)
+        return ingest(reading, context: context, lightweight: lightweight)
     }
 
-    /// Bytes de la imagen tal como están en el portapapeles, sin decodificar.
-    private static func rawImageData(from pasteboard: UIPasteboard) -> Data? {
-        let types = [UTType.png, .jpeg, .heic, .gif, .tiff].map(\.identifier)
-        for type in types where pasteboard.contains(pasteboardTypes: [type]) {
-            // Más de 25 MB ya no cabe con holgura en la memoria del teclado.
-            if let data = pasteboard.data(forPasteboardType: type), !data.isEmpty, data.count <= 25_000_000 {
-                return data
+    /// Lee el portapapeles fuera del hilo principal.
+    static func readPasteboard(lightweight: Bool) async -> PasteboardWatch.Reading {
+        let images = AppGroup.sharedDefaults.object(forKey: SettingsKeys.saveImages) as? Bool ?? true
+        // Más de 25 MB ya no cabe con holgura en la memoria del teclado.
+        let maxBytes = lightweight ? 25_000_000 : 80_000_000
+        return await Task.detached(priority: .userInitiated) {
+            PasteboardWatch.read(images: images, maxImageBytes: maxBytes, decode: !lightweight)
+        }.value
+    }
+
+    /// Guarda lo leído.
+    ///
+    /// Si es lo mismo que la última lectura no se toca el historial: iOS sube
+    /// el contador del portapapeles sin que se copie nada, y antes eso volvía
+    /// a subir al principio lo de siempre como si se acabara de copiar.
+    ///
+    /// - Parameter userInitiated: el usuario tocó Pegar. Entonces se guarda
+    ///   aunque sea lo de la última vez (puede haberlo borrado del historial).
+    @discardableResult
+    static func ingest(_ reading: PasteboardWatch.Reading, context: ModelContext,
+                       lightweight: Bool, userInitiated: Bool = false) -> Outcome {
+        var isText = false
+        if case .text = reading.content { isText = true }
+        if let prompted = PasteboardWatch.promptEvidence(denied: reading.content == .denied,
+                                                         seconds: reading.seconds,
+                                                         isText: isText, isRemote: reading.isRemote) {
+            PasteboardWatch.askMode = prompted
+        }
+
+        let previous = PasteboardWatch.lastMark?.contentHash
+        func remember(_ hash: String?) {
+            PasteboardWatch.lastMark = PasteboardMark(count: reading.count, signature: reading.signature,
+                                                      contentHash: hash)
+        }
+
+        switch reading.content {
+        case .denied:
+            remember(previous)
+            return .denied
+        case .nothing:
+            remember(nil)
+            return .empty
+        case .text(let text):
+            let hash = HashService.sha256(text.trimmingCharacters(in: .whitespacesAndNewlines))
+            remember(hash)
+            if hash == previous, !userInitiated { return .unchanged }
+            return saveText(text, context: context, lightweight: lightweight)
+        case .image(let data):
+            let hash = HashService.sha256(data)
+            remember(hash)
+            if hash == previous, !userInitiated { return .unchanged }
+            return saveImage(data: data, size: ImageTools.pixelSize(of: data), context: context,
+                             lightweight: lightweight)
+        }
+    }
+
+    /// Lo que entrega el botón Pegar del sistema (`PasteButton`): iOS no
+    /// pregunta porque el usuario lo tocó.
+    @discardableResult
+    static func save(pasted providers: [NSItemProvider], context: ModelContext) async -> Outcome {
+        guard let provider = providers.first else { return .empty }
+        let saveImages = AppGroup.sharedDefaults.object(forKey: SettingsKeys.saveImages) as? Bool ?? true
+
+        if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+            guard saveImages else { return .ignored }
+            // El mismo formato que elegiría `PasteboardWatch.read`: así la
+            // huella coincide con la de una captura automática.
+            let type = PasteboardWatch.imageTypes.first(where: { provider.hasItemConformingToTypeIdentifier($0) })
+                ?? UTType.image.identifier
+            guard let data = await loadData(from: provider, type: type), !data.isEmpty else { return .empty }
+            PasteboardWatch.markSeen(contentHash: HashService.sha256(data))
+            return saveImage(data: data, size: ImageTools.pixelSize(of: data), context: context)
+        }
+
+        var text: String?
+        if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
+            text = await loadURL(from: provider)?.absoluteString
+        }
+        if text == nil {
+            text = await loadString(from: provider)
+        }
+        guard let text else { return .empty }
+        PasteboardWatch.markSeen(contentHash: HashService.sha256(text.trimmingCharacters(in: .whitespacesAndNewlines)))
+        return saveText(text, context: context)
+    }
+
+    private static func loadData(from provider: NSItemProvider, type: String) async -> Data? {
+        await withCheckedContinuation { continuation in
+            _ = provider.loadDataRepresentation(forTypeIdentifier: type) { data, _ in
+                continuation.resume(returning: data)
             }
         }
-        return nil
+    }
+
+    private static func loadURL(from provider: NSItemProvider) async -> URL? {
+        await withCheckedContinuation { continuation in
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                continuation.resume(returning: url)
+            }
+        }
+    }
+
+    private static func loadString(from provider: NSItemProvider) async -> String? {
+        await withCheckedContinuation { continuation in
+            _ = provider.loadObject(ofClass: String.self) { text, _ in
+                continuation.resume(returning: text)
+            }
+        }
     }
 
     /// Completa lo que el teclado dejó pendiente: el OCR de las imágenes y la

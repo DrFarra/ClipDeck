@@ -1766,6 +1766,8 @@ final class KeyboardViewController: UIInputViewController {
             titles = ["↺ " + revert.original] + Array(words.prefix(2))
         } else if mode == .keys, currentWord().isEmpty, let chip = pasteChipTitle() {
             titles = [chip] + Array(words.prefix(2))
+        } else if pasteChipShown, !currentWord().isEmpty {
+            dismissPasteChip()
         }
         for (i, b) in suggestionButtons.enumerated() {
             b.text = i < titles.count ? titles[i] : ""
@@ -1814,47 +1816,135 @@ final class KeyboardViewController: UIInputViewController {
     // MARK: Pegar lo recién copiado
     //
     // Si se copió algo nuevo, la barra ofrece pegarlo de un toque, como
-    // Gboard. Para saberlo bastan `changeCount` y `hasStrings`, que no leen el
-    // contenido: iOS no pide «Permitir pegar» hasta que el usuario toca.
+    // Gboard. Para saberlo basta lo que iOS deja ver sin avisar (contador y
+    // tipos): no pide «Permitir pegar» hasta que el usuario toca.
+    //
+    // Antes bastaba con que cambiara el contador, pero iOS lo sube solo cada
+    // vez que un campo toma el foco: el botón salía casi siempre que se abría
+    // el teclado, con lo copiado hacía rato. Ahora sólo sale si el
+    // portapapeles tiene otros tipos que la última vez (seguro que es algo
+    // nuevo), y si se ignora no vuelve por lo mismo.
 
     private static let pasteChip = "📋 Pegar"
+    private static let pasteDismissedKey = "kb.pasteChipDismissed"
     private var pasteSeenCount = -1
     private var pasteSeenAt: CFTimeInterval = 0
-    private var pasteHasText = false
+    private var pasteIsNew = false
+    private var pasteSeenSignature = ""
+    private var pasteChipShown = false
+    /// Hay algo copiado que no se leyó porque iOS habría preguntado: el panel
+    /// ofrece «Pegar lo copiado».
+    private var pasteWaiting = false
+    private var captureTask: Task<Void, Never>?
+    private var pasteTask: Task<Void, Never>?
 
     private func pasteChipTitle() -> String? {
-        guard hasFullAccess, numPad == nil else { return nil }
+        guard hasFullAccess, numPad == nil, config.pasteChip else { return nil }
         let pasteboard = UIPasteboard.general
         let count = pasteboard.changeCount
-        guard count != AppGroup.sharedDefaults.integer(forKey: SettingsKeys.lastPasteboardChange) else { return nil }
         if count != pasteSeenCount {
+            let peek = PasteboardWatch.peek(pasteboard)
             pasteSeenCount = count
             pasteSeenAt = CACurrentMediaTime()
-            pasteHasText = pasteboard.hasStrings || pasteboard.hasURLs
+            pasteSeenSignature = peek.signature
+            let change = PasteboardWatch.classify(count: peek.count, itemCount: peek.itemCount,
+                                                  types: peek.types, last: PasteboardWatch.lastMark)
+            let dismissed = AppGroup.sharedDefaults.string(forKey: Self.pasteDismissedKey) == peek.signature
+            pasteIsNew = change == .newKind && !dismissed && !pasteboard.hasImages
+                && (pasteboard.hasStrings || pasteboard.hasURLs)
         }
         // Sólo un rato: pasado ese tiempo ya no es «lo recién copiado».
-        guard pasteHasText, CACurrentMediaTime() - pasteSeenAt < 120 else { return nil }
+        guard pasteIsNew, CACurrentMediaTime() - pasteSeenAt < 90 else { return nil }
+        pasteChipShown = true
         return Self.pasteChip
     }
 
+    /// Se siguió escribiendo sin tocar el botón: no vuelve a salir por lo mismo.
+    private func dismissPasteChip() {
+        pasteChipShown = false
+        pasteIsNew = false
+        AppGroup.sharedDefaults.set(pasteSeenSignature, forKey: Self.pasteDismissedKey)
+    }
+
+    /// Pega lo copiado porque el usuario lo pidió (botón de la barra o del
+    /// panel). La lectura va en segundo plano: se queda esperando mientras iOS
+    /// pregunta «¿Permitir pegar?».
     private func pasteRecent() {
-        let pasteboard = UIPasteboard.general
-        guard let text = pasteboard.string ?? pasteboard.url?.absoluteString, !text.isEmpty else {
-            showHint("No se pudo leer lo copiado")
-            return
-        }
-        put(text)
-        // Queda también en el historial, y el botón desaparece.
+        guard hasFullAccess, pasteTask == nil else { return }
         if clipContainer == nil { clipContainer = ClipStore.makeContainer() }
-        if let container = clipContainer {
-            CaptureService.saveText(text, context: ModelContext(container), lightweight: true)
+        let container = clipContainer
+        pasteChipShown = false
+        pasteIsNew = false
+        pasteTask = Task { @MainActor [weak self] in
+            let reading = await CaptureService.readPasteboard(lightweight: true)
+            guard let self else { return }
+            self.pasteTask = nil
+            self.pasteWaiting = false
+            let paused = AppGroup.sharedDefaults.bool(forKey: SettingsKeys.capturePaused)
+            func keep() {
+                // Queda también en el historial (salvo con la captura en pausa).
+                guard let container, !paused else {
+                    PasteboardWatch.markSeen(contentHash: nil)
+                    return
+                }
+                CaptureService.ingest(reading, context: ModelContext(container), lightweight: true,
+                                      userInitiated: true)
+            }
+            switch reading.content {
+            case .text(let text) where !text.isEmpty:
+                self.put(text)
+                keep()
+                self.allSnapshots = []
+                self.pendingRevert = nil
+                self.justSwiped = nil
+                if self.mode == .clipboard { self.mode = .keys; self.refreshMode() }
+                self.updateShiftFromContext()
+                self.scheduleSuggestions()
+            case .image:
+                // Un teclado no puede insertar imágenes: se guarda y se ve en el panel.
+                keep()
+                self.showHint("Imagen guardada · mantén pulsado el campo y Pegar")
+                self.snapshotsAt = .distantPast
+                if self.mode == .clipboard { self.refreshMode() }
+            case .denied:
+                keep()
+                self.showHint("iOS no dejó leer lo copiado")
+                if self.mode == .clipboard { self.refreshMode() }
+            case .text, .nothing:
+                keep()
+                self.showHint("No hay nada copiado")
+                if self.mode == .clipboard { self.refreshMode() }
+            }
         }
-        AppGroup.sharedDefaults.set(pasteboard.changeCount, forKey: SettingsKeys.lastPasteboardChange)
-        allSnapshots = []
-        pendingRevert = nil
-        justSwiped = nil
-        updateShiftFromContext()
-        scheduleSuggestions()
+    }
+
+    /// Captura automática al abrir el panel, en segundo plano. Sólo lee si
+    /// puede haber algo nuevo y si iOS no va a preguntar; si preguntaría, el
+    /// panel ofrece «Pegar lo copiado» en su lugar.
+    private func startAutoCapture() {
+        guard hasFullAccess, captureTask == nil, pasteTask == nil, let container = clipContainer else { return }
+        captureTask = Task { @MainActor [weak self] in
+            let outcome = await CaptureService.autoCapture(context: ModelContext(container), lightweight: true)
+            guard let self else { return }
+            self.captureTask = nil
+            var waiting = false
+            var refresh = false
+            switch outcome {
+            case .saved, .duplicate:
+                refresh = true
+            case .waitingForUser:
+                waiting = true
+            default:
+                break
+            }
+            if waiting != self.pasteWaiting {
+                self.pasteWaiting = waiting
+                refresh = true
+            }
+            guard refresh, self.mode == .clipboard else { return }
+            self.snapshotsAt = .distantPast
+            self.refreshMode()
+        }
     }
 
     // MARK: Confirmación para olvidar una sugerencia (sin UIAlertController, no
@@ -2078,6 +2168,12 @@ final class KeyboardViewController: UIInputViewController {
                               historyIsEmpty: allSnapshots.isEmpty,
                               favoritesOnly: favoritesOnly,
                               query: clipQuery,
+                              canPasteCopied: pasteWaiting && clipQuery.isEmpty,
+                              onPasteCopied: { [weak self] in
+                                  guard let self else { return }
+                                  self.keyFeedback()
+                                  self.pasteRecent()
+                              },
                               onFilter: { [weak self] fav in
                                   guard let self else { return }
                                   self.keyFeedback()
@@ -2126,9 +2222,8 @@ final class KeyboardViewController: UIInputViewController {
             return
         }
         let type = ImageTools.typeIdentifier(of: data) ?? UTType.jpeg.identifier
-        UIPasteboard.general.setData(data, forPasteboardType: type)
-        // Que no vuelva a entrar al historial como captura nueva.
-        AppGroup.sharedDefaults.set(UIPasteboard.general.changeCount, forKey: SettingsKeys.lastPasteboardChange)
+        // Con la marca de ClipDeck: no vuelve a entrar al historial como nueva.
+        PasteboardWatch.copy([type: data])
         showHint("Imagen copiada · mantén pulsado y Pegar")
     }
 
@@ -2167,8 +2262,8 @@ final class KeyboardViewController: UIInputViewController {
         if clipContainer == nil { clipContainer = ClipStore.makeContainer() }
         guard let container = clipContainer else { return }
         let context = ModelContext(container)
-        // Modo ligero: sin decodificar imágenes, sin OCR ni descargas.
-        CaptureService.captureIfNeeded(context: context, lightweight: true)
+        // Lo recién copiado entra en segundo plano y el panel se actualiza.
+        startAutoCapture()
         var d = FetchDescriptor<ClipItem>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
         d.fetchLimit = 60
         let items = (try? context.fetch(d)) ?? []
@@ -2910,6 +3005,9 @@ struct ClipboardPanel: View {
     let historyIsEmpty: Bool
     let favoritesOnly: Bool
     let query: String
+    /// Hay algo copiado que no se leyó solo porque iOS habría preguntado.
+    let canPasteCopied: Bool
+    let onPasteCopied: () -> Void
     let onFilter: (Bool) -> Void
     let onSearch: () -> Void
     let onClearQuery: () -> Void
@@ -2932,6 +3030,9 @@ struct ClipboardPanel: View {
                         chip("Recientes", "clock.arrow.circlepath", active: !favoritesOnly) { onFilter(false) }
                         chip("Favoritos", "star.fill", active: favoritesOnly) { onFilter(true) }
                         Spacer()
+                        if canPasteCopied {
+                            chip("Pegar lo copiado", "doc.on.clipboard", active: true, action: onPasteCopied)
+                        }
                     }
                     .padding(.horizontal, 6)
 

@@ -184,7 +184,7 @@ struct ItemDetailView: View {
                     Text(hex).font(.headline.monospaced())
                     Spacer()
                     Button("Copiar hex") {
-                        UIPasteboard.general.string = hex
+                        PasteboardWatch.copy(text: hex)
                         Haptics.light()
                     }
                     .buttonStyle(.bordered)

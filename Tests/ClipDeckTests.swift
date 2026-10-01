@@ -291,3 +291,143 @@ final class SwipeLexiconTests: XCTestCase {
         XCTAssertEqual(snapshot.flat.count, snapshot.lens.reduce(0) { $0 + Int($1) })
     }
 }
+
+// MARK: - Cuándo leer el portapapeles
+
+final class PasteboardWatchTests: XCTestCase {
+
+    private let plainText = ["public.utf8-plain-text"]
+    private var plainSignature: String { PasteboardWatch.signature(itemCount: 1, types: plainText) }
+
+    func testNadaSiNoCambioElContador() {
+        let last = PasteboardMark(count: 10, signature: plainSignature, contentHash: nil)
+        XCTAssertEqual(PasteboardWatch.classify(count: 10, itemCount: 1, types: plainText, last: last), .none)
+    }
+
+    func testContadorQueSubeConLosMismosTiposEsDudoso() {
+        // iOS sube el contador dos veces cuando un campo de texto toma el foco.
+        let last = PasteboardMark(count: 10, signature: plainSignature, contentHash: "x")
+        XCTAssertEqual(PasteboardWatch.classify(count: 12, itemCount: 1, types: plainText, last: last), .sameKind)
+    }
+
+    func testOtrosTiposSonAlgoNuevo() {
+        let last = PasteboardMark(count: 10, signature: plainSignature, contentHash: "x")
+        XCTAssertEqual(PasteboardWatch.classify(count: 11, itemCount: 1,
+                                                types: ["public.url", "public.utf8-plain-text"], last: last), .newKind)
+        XCTAssertEqual(PasteboardWatch.classify(count: 11, itemCount: 2, types: plainText, last: last), .newKind)
+        // Sin nada anterior, o guardado por una versión que no anotaba tipos.
+        XCTAssertEqual(PasteboardWatch.classify(count: 1, itemCount: 1, types: ["public.png"], last: nil), .newKind)
+        let legacy = PasteboardMark(count: 10, signature: "", contentHash: nil)
+        XCTAssertEqual(PasteboardWatch.classify(count: 11, itemCount: 1, types: plainText, last: legacy), .newKind)
+    }
+
+    func testLoCopiadoPorClipDeckNoSeVuelveALeer() {
+        let last = PasteboardMark(count: 10, signature: plainSignature, contentHash: nil)
+        let types = plainText + [PasteboardWatch.ownType]
+        XCTAssertEqual(PasteboardWatch.classify(count: 14, itemCount: 1, types: types, last: last), .own)
+        XCTAssertFalse(PasteboardWatch.shouldAutoRead(.own, askMode: false))
+    }
+
+    func testElOrdenDeLosTiposNoImporta() {
+        XCTAssertEqual(PasteboardWatch.signature(itemCount: 1, types: ["b", "a"]),
+                       PasteboardWatch.signature(itemCount: 1, types: ["a", "b"]))
+    }
+
+    func testSiIOSPreguntaSoloSeLeeAPedido() {
+        XCTAssertTrue(PasteboardWatch.shouldAutoRead(.sameKind, askMode: false))
+        XCTAssertTrue(PasteboardWatch.shouldAutoRead(.newKind, askMode: false))
+        XCTAssertFalse(PasteboardWatch.shouldAutoRead(.sameKind, askMode: true))
+        XCTAssertFalse(PasteboardWatch.shouldAutoRead(.newKind, askMode: true))
+        XCTAssertFalse(PasteboardWatch.shouldAutoRead(.none, askMode: false))
+    }
+
+    func testSeDeduceSiIOSPregunta() {
+        XCTAssertEqual(PasteboardWatch.promptEvidence(denied: true, seconds: 0, isText: false, isRemote: false), true)
+        XCTAssertEqual(PasteboardWatch.promptEvidence(denied: false, seconds: 1.4, isText: true, isRemote: false), true)
+        XCTAssertEqual(PasteboardWatch.promptEvidence(denied: false, seconds: 0.01, isText: true, isRemote: false), false)
+        // Las imágenes y el portapapeles universal tardan por sí mismos.
+        XCTAssertNil(PasteboardWatch.promptEvidence(denied: false, seconds: 2, isText: false, isRemote: false))
+        XCTAssertNil(PasteboardWatch.promptEvidence(denied: false, seconds: 2, isText: true, isRemote: true))
+        XCTAssertNil(PasteboardWatch.promptEvidence(denied: false, seconds: 0.3, isText: true, isRemote: false))
+    }
+}
+
+// MARK: - Relecturas del portapapeles
+
+@MainActor
+final class CaptureIngestTests: XCTestCase {
+
+    override func setUp() {
+        super.setUp()
+        PasteboardWatch.lastMark = nil
+        PasteboardWatch.askMode = false
+    }
+
+    override func tearDown() {
+        PasteboardWatch.lastMark = nil
+        PasteboardWatch.askMode = false
+        super.tearDown()
+    }
+
+    private func makeContext() throws -> ModelContext {
+        let config = ModelConfiguration(schema: ClipStore.schema, isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: ClipStore.schema, configurations: [config])
+        return ModelContext(container)
+    }
+
+    private func reading(_ content: PasteboardWatch.Content, count: Int,
+                         seconds: TimeInterval = 0.01) -> PasteboardWatch.Reading {
+        PasteboardWatch.Reading(content: content, count: count,
+                                signature: PasteboardWatch.signature(itemCount: 1, types: ["public.utf8-plain-text"]),
+                                seconds: seconds, isRemote: false)
+    }
+
+    func testReleerLoMismoNoLoSubeNiLoDuplica() throws {
+        let context = try makeContext()
+        guard case .saved(let item) = CaptureService.ingest(reading(.text("hola mundo"), count: 1),
+                                                            context: context, lightweight: true) else {
+            return XCTFail("la primera lectura debía guardarse")
+        }
+        let before = Date(timeIntervalSince1970: 1_000)
+        item.createdAt = before
+        try context.save()
+
+        // iOS subió el contador sin que se copiara nada.
+        guard case .unchanged = CaptureService.ingest(reading(.text("hola mundo"), count: 3),
+                                                      context: context, lightweight: true) else {
+            return XCTFail("lo mismo de antes no debía tocarse")
+        }
+        XCTAssertEqual(item.createdAt, before)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<ClipItem>()), 1)
+    }
+
+    func testPegarAPedidoGuardaAunqueSeaLoMismo() throws {
+        let context = try makeContext()
+        CaptureService.ingest(reading(.text("hola mundo"), count: 1), context: context, lightweight: true)
+        guard case .duplicate = CaptureService.ingest(reading(.text("hola mundo"), count: 1), context: context,
+                                                      lightweight: true, userInitiated: true) else {
+            return XCTFail("al pedirlo el usuario debía encontrar lo ya guardado")
+        }
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<ClipItem>()), 1)
+    }
+
+    func testUnaLecturaLentaIndicaQueIOSPregunta() throws {
+        let context = try makeContext()
+        CaptureService.ingest(reading(.text("algo"), count: 1, seconds: 1.2), context: context, lightweight: true)
+        XCTAssertTrue(PasteboardWatch.askMode)
+        CaptureService.ingest(reading(.text("otra cosa"), count: 2), context: context, lightweight: true)
+        XCTAssertFalse(PasteboardWatch.askMode)
+    }
+
+    func testSiNoDejaLeerSeRecuerdaLoAnterior() throws {
+        let context = try makeContext()
+        CaptureService.ingest(reading(.text("hola mundo"), count: 1), context: context, lightweight: true)
+        guard case .denied = CaptureService.ingest(reading(.denied, count: 4, seconds: 0.8),
+                                                   context: context, lightweight: true) else {
+            return XCTFail("una lectura denegada debía notarse")
+        }
+        XCTAssertTrue(PasteboardWatch.askMode)
+        XCTAssertEqual(PasteboardWatch.lastMark?.count, 4)
+        XCTAssertEqual(PasteboardWatch.lastMark?.contentHash, HashService.sha256("hola mundo"))
+    }
+}
