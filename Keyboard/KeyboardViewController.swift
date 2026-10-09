@@ -430,6 +430,7 @@ final class KeyboardViewController: UIInputViewController {
         // Guardar lo aprendido antes de que el sistema descargue el teclado.
         WordLearner.flush()
         TouchModel.flush()
+        TypingStats.flush()
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -1049,6 +1050,7 @@ final class KeyboardViewController: UIInputViewController {
 
     @discardableResult
     func insertChar(_ base: String, at point: CGPoint? = nil) -> String {
+        if !searching { stat(.key) }
         // Los signos que cierran palabra desde la capa de símbolos pasan por
         // el mismo camino que la coma y el punto: corrigen y aprenden la
         // palabra anterior («que tal?» corregía «tal» sólo con el punto).
@@ -1201,6 +1203,7 @@ final class KeyboardViewController: UIInputViewController {
 
     func backspaceDown() {
         keyFeedback()
+        if !searching { stat(.backspace) }
         autoSpaceInserted = false
         deleteRepeats = 0
         deleteTimer?.invalidate()
@@ -1684,6 +1687,7 @@ final class KeyboardViewController: UIInputViewController {
         if feedback { keyFeedback() }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         let word = TextRules.wordBefore(before)
+        if !word.isEmpty { stat(.word) }
         let previous = TextRules.previousWord(in: before)
         pendingRevert = nil
         let swiped = justSwiped
@@ -1746,6 +1750,7 @@ final class KeyboardViewController: UIInputViewController {
             }
         }
         if let fix {
+            stat(.correction)
             deleteBack(word.count)
             put(fix + separator)
             pendingRevert = Revert(original: word, fixed: fix, tail: separator)
@@ -1779,6 +1784,11 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     // MARK: Autocorrector
+
+    /// Velocidad real, por separado con y sin autocorrección (ver `TypingStats`).
+    private func stat(_ event: TypingStats.Event) {
+        TypingStats.record(event, corrector: config.autocorrect)
+    }
 
     /// Lo que necesita el autocorrector para decidir sobre `word`, leído en
     /// el hilo principal. nil si esa palabra no se corrige: lo recién escrito
@@ -1878,6 +1888,7 @@ final class KeyboardViewController: UIInputViewController {
         // rápido, el principio de la siguiente palabra (antes ahí la
         // corrección se perdía). Si movió el cursor, no se toca nada.
         guard let tail = TextRules.textAfterCorrectable(original, in: before) else { return }
+        stat(.correction)
         deleteBack(original.count + tail.count)
         put(fixed + tail)
         let separatorsOnly = tail.allSatisfy { TextRules.isSeparator($0) }
@@ -1903,6 +1914,7 @@ final class KeyboardViewController: UIInputViewController {
     @discardableResult
     private func undoAutocorrect(fromBackspace: Bool) -> Bool {
         guard let revert = validRevert() else { return false }
+        stat(.undone)
         pendingRevert = nil
         deleteBack(revert.fixed.count + revert.tail.count)
         put(revert.original + (fromBackspace ? String(revert.tail.dropLast()) : revert.tail))

@@ -12,6 +12,8 @@ struct KeyboardSettingsView: View {
     @State private var dictComplete = SwipeLexicon.isComplete
     @State private var touchSamples = Int(TouchModel.totalSamples)
     @State private var showTouchReset = false
+    @State private var statsOn = TypingStats.totals(corrector: true)
+    @State private var statsOff = TypingStats.totals(corrector: false)
 
     private let punctuationOptions = [",", ".", "?", "!", ":", ";", "-", "'", "@"]
 
@@ -21,6 +23,7 @@ struct KeyboardSettingsView: View {
             designSection
             punctuationSection
             writingSection
+            speedSection
             adaptiveSection
             swipeSection
             trackpadSection
@@ -108,6 +111,40 @@ struct KeyboardSettingsView: View {
             Text("Si el teclado corrige una palabra que querías tal cual, pulsa borrar justo después: vuelve a como la escribiste y no se corrige más. Las sustituciones de texto de Ajustes → General → Teclado también funcionan aquí.")
                 .font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    @ViewBuilder private var speedSection: some View {
+        Section("Tu velocidad real") {
+            speedRow("Con autocorrección", statsOn)
+            speedRow("Sin autocorrección", statsOff)
+            Button("Empezar de cero", role: .destructive) {
+                TypingStats.reset()
+                statsOn = TypingStats.Totals()
+                statsOff = TypingStats.Totals()
+            }
+            Text("Palabras por minuto mientras escribes (las pausas no cuentan). Para comparar, escribe unos días con la autocorrección y otros sin ella. Sólo se guardan números, nunca lo que escribes.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .onAppear {
+            statsOn = TypingStats.totals(corrector: true)
+            statsOff = TypingStats.totals(corrector: false)
+        }
+    }
+
+    private func speedRow(_ title: String, _ t: TypingStats.Totals) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            LabeledContent(title, value: t.wordsPerMinute.map { String(format: "%.0f ppm", $0) } ?? "—")
+            if t.words > 0 {
+                Text(speedDetail(t)).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func speedDetail(_ t: TypingStats.Totals) -> String {
+        var parts = ["\(t.words) palabras"]
+        if let b = t.backspacesPerWord { parts.append(String(format: "%.2f borrados por palabra", b)) }
+        if let u = t.undoneShare { parts.append(String(format: "%.0f %% de correcciones deshechas", u * 100)) }
+        return parts.joined(separator: " · ")
     }
 
     @ViewBuilder private var adaptiveSection: some View {

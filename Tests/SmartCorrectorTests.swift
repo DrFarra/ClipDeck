@@ -195,3 +195,27 @@ final class TextRulesCorrectionTests: XCTestCase {
         XCTAssertEqual(TextRules.words(in: "Hola, ¿qué tal?  bien"), ["Hola", "qué", "tal", "bien"])
     }
 }
+
+final class TypingStatsTests: XCTestCase {
+
+    func testSoloCuentaElTiempoEscribiendo() {
+        var t = TypingStats.Totals()
+        TypingStats.apply(.key, to: &t, gap: nil)
+        TypingStats.apply(.key, to: &t, gap: 0.25)
+        TypingStats.apply(.word, to: &t, gap: 0.3)
+        TypingStats.apply(.key, to: &t, gap: 40)          // una pausa: no cuenta
+        XCTAssertEqual(t.seconds, 0.55, accuracy: 1e-9)
+        XCTAssertEqual(t.keys, 3)
+        XCTAssertEqual(t.words, 1)
+        XCTAssertNil(t.wordsPerMinute)                   // menos de medio minuto
+    }
+
+    func testPalabrasPorMinutoYCorreccionesDeshechas() {
+        var t = TypingStats.Totals(words: 30, backspaces: 6, corrections: 4, undone: 1, seconds: 60)
+        XCTAssertEqual(t.wordsPerMinute ?? 0, 30, accuracy: 1e-9)
+        XCTAssertEqual(t.backspacesPerWord ?? 0, 0.2, accuracy: 1e-9)
+        XCTAssertEqual(t.undoneShare ?? 0, 0.25, accuracy: 1e-9)
+        TypingStats.apply(.undone, to: &t, gap: 1)
+        XCTAssertEqual(t.undone, 2)
+    }
+}
