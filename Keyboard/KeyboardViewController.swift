@@ -225,28 +225,6 @@ final class KeyboardViewController: UIInputViewController {
         haptic.prepare()
         setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
 
-        requestSupplementaryLexicon { [weak self] lex in
-            var words: [String] = []
-            var shortcuts: [String: String] = [:]
-            var names = Set<String>()
-            for entry in lex.entries {
-                words.append(entry.documentText)
-                let input = entry.userInput.trimmingCharacters(in: .whitespaces)
-                if !input.isEmpty, !input.contains(" "),
-                   input.lowercased() != entry.documentText.lowercased() {
-                    shortcuts[input.lowercased()] = entry.documentText
-                } else if !entry.documentText.contains(" ") {
-                    names.insert(entry.documentText.lowercased())
-                }
-            }
-            let found = (words: words, shortcuts: shortcuts, names: names)
-            DispatchQueue.main.async {
-                self?.lexicon = found.words
-                self?.replacements = found.shortcuts
-                self?.lexiconWords = found.names
-            }
-        }
-
         // El fondo lo pone el tema (ver `FeedbackHostView`).
         view.backgroundColor = .clear
         inputView?.allowsSelfSizing = true
@@ -324,6 +302,34 @@ final class KeyboardViewController: UIInputViewController {
         }
     }
 
+    /// Sustituciones de texto y contactos del sistema. Se vuelven a pedir cada
+    /// vez que aparece el teclado: iOS mantiene viva la extensión entre usos y,
+    /// leídas una sola vez, un cambio en Ajustes → General → Teclado no se
+    /// notaba hasta que el sistema la cerraba.
+    private func loadSupplementaryLexicon() {
+        requestSupplementaryLexicon { [weak self] lex in
+            var words: [String] = []
+            var shortcuts: [String: String] = [:]
+            var names = Set<String>()
+            for entry in lex.entries {
+                words.append(entry.documentText)
+                let input = entry.userInput.trimmingCharacters(in: .whitespaces)
+                if !input.isEmpty, !input.contains(" "),
+                   input.lowercased() != entry.documentText.lowercased() {
+                    shortcuts[input.lowercased()] = entry.documentText
+                } else if !entry.documentText.contains(" ") {
+                    names.insert(entry.documentText.lowercased())
+                }
+            }
+            let found = (words: words, shortcuts: shortcuts, names: names)
+            DispatchQueue.main.async {
+                self?.lexicon = found.words
+                self?.replacements = found.shortcuts
+                self?.lexiconWords = found.names
+            }
+        }
+    }
+
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
@@ -333,6 +339,7 @@ final class KeyboardViewController: UIInputViewController {
         noteOwnEdit()
         haptic.prepare()
         if mode == .keys { showKeyboard() }
+        loadSupplementaryLexicon()
     }
 
     /// Recarga las preferencias por si cambiaron en la app y, si cambiaron,
@@ -363,6 +370,7 @@ final class KeyboardViewController: UIInputViewController {
 
     @objc private func hostWillEnterForeground() {
         captureIfCopied()
+        loadSupplementaryLexicon()
         guard reloadConfig() else { return }
         applyInputTraits()
         if mode == .keys { showKeyboard() }
