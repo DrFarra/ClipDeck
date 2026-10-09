@@ -59,6 +59,8 @@ enum SmartCorrector {
                            lexicon: SwipeLexicon.Snapshot?,
                            spelling: (String) -> Spelling,
                            isKnown: (String) -> Bool = WordLearner.isKnown,
+                           isProtected: (String) -> Bool = WordLearner.isProtected,
+                           guesses: (String) -> [String] = { _ in [] },
                            successors: (String) -> [String] = WordLearner.successors) -> String? {
         var word = input.word
 
@@ -76,13 +78,23 @@ enum SmartCorrector {
         guard lower.count >= 2, lower.count <= 24,
               lower.rangeOfCharacter(from: .decimalDigits) == nil,
               word != word.uppercased() else { return casingFix }    // siglas: «ONU», «OK»
-        if isKnown(lower) || input.seenWords.contains(lower) || isChatWord(lower) { return casingFix }
+        if input.seenWords.contains(lower) || isChatWord(lower) || isProtected(lower) { return casingFix }
 
         let spelled = spelling(word)
-        if spelled == .valid { return casingFix }
+        if spelled == .valid {
+            // Existe, pero casi siempre se quiere con tilde: «anos» → «años»,
+            // «mas» → «más» (no «esta», «tu» o «si»: las dos se usan mucho).
+            // Que se haya escrito así antes no cuenta: el corrector anterior
+            // no la tocaba. Sólo la frena haber deshecho la corrección.
+            if let lex = lexicon, let accented = accentVariant(of: lower, lex: lex) {
+                return matchCase(of: word, to: accented)
+            }
+            return casingFix
+        }
+        if isKnown(lower) { return casingFix }
         // Lo que queda si no hay mejor corrección.
         let fallback = spelled == .properNoun ? word.prefix(1).uppercased() + word.dropFirst() : casingFix
-        guard lower.count >= 3, let lex = lexicon, lex.count > 0,
+        guard lower.count >= 2, let lex = lexicon, lex.count > 0,
               let typed = SwipeAlphabet.encode(lower) else { return fallback }
 
         // Ya es una palabra frecuente tal cual (con su tilde): no es errata.
@@ -109,18 +121,58 @@ enum SmartCorrector {
             return matchCase(of: word, to: fix)
         }
         if spelled == .properNoun { return fallback }
-        if spelled == .unknown, !(capitalized && input.midSentence),
+        // Palabras poco usadas que el vocabulario no trae («topónimo»,
+        // «bilingüe»): las propone el corrector del sistema y se juzgan con
+        // el mismo modelo de erratas y los mismos límites.
+        if spelled == .unknown, typed.count >= 4,
+           let fix = bestWord(typed: typed, lower: lower, lex: lex, geometry: geometry,
+                              touches: input.touches, successors: successors, limit: limit,
+                              only: guesses(lower)) {
+            return matchCase(of: word, to: fix)
+        }
+        if spelled == .unknown, typed.count >= 4, !(capitalized && input.midSentence),
            let split = bestSplit(typed: typed, lex: lex, geometry: geometry, previous: input.previous) {
             return matchCase(of: word, to: split)
         }
         return fallback
     }
 
+    // MARK: Tildes en palabras que existen sin ellas
+
+    /// Veces más usada que tiene que ser la forma con tilde (en prior: 13·ln 8).
+    private static let accentPriorGap = 27.0
+
+    private static func accentVariant(of lower: String, lex: SwipeLexicon.Snapshot) -> String? {
+        guard let keys = SwipeAlphabet.encode(lower) else { return nil }
+        let folded = SwipeLexicon.folded(keys)
+        // Sólo si no se tecleó ninguna tilde: una puesta a propósito se respeta.
+        guard folded == lower else { return nil }
+        // La «ñ» tiene tecla propia: «anos» → «años» se busca aparte.
+        var forms = [folded]
+        let chars = Array(folded)
+        for i in chars.indices where chars[i] == "n" {
+            var c = chars
+            c[i] = "ñ"
+            forms.append(String(c))
+        }
+        var best: (word: String, prior: UInt8)?
+        for form in forms {
+            if let hit = lex.lookup(folded: form), hit.word != lower, hit.prior > (best?.prior ?? 0) {
+                best = hit
+            }
+        }
+        guard let best, best.prior >= 120 else { return nil }
+        let own = Double(lex.prior(of: lower, folded: folded) ?? 0)
+        return Double(best.prior) - own >= accentPriorGap ? best.word : nil
+    }
+
     // MARK: Una palabra
 
+    /// La mejor candidata del vocabulario o, con `only`, de esa lista.
     private static func bestWord(typed: [UInt8], lower: String, lex: SwipeLexicon.Snapshot,
                                  geometry: Geometry, touches: [CGPoint],
-                                 successors: Set<String>, limit: Double) -> String? {
+                                 successors: Set<String>, limit: Double,
+                                 only: [String]? = nil) -> String? {
         var typedMask: UInt32 = 0
         for i in typed { typedMask |= (UInt32(1) << UInt32(i)) }
 
@@ -146,33 +198,46 @@ enum SmartCorrector {
         var candidate = [UInt8]()
         candidate.reserveCapacity(24)
 
-        for i in 0..<lex.count {
-            let len = Int(lens[i])
-            if abs(len - n) > maxLengthGap { continue }
-            if (masks[i] ^ typedMask).nonzeroBitCount > 4 { continue }
-            if words[i] == lower { continue }
-
-            let s = Int(starts[i])
-            candidate.removeAll(keepingCapacity: true)
-            for k in 0..<len { candidate.append(flat[s + k]) }
-
+        func consider(_ word: String, prior: UInt8) {
             let d = cost.distance(to: candidate, cutoff: 2.2)
-            guard d < 2.2 else { continue }
+            guard d < 2.2 else { return }
 
-            var score = d - Double(priors[i]) / 255.0 * Tuning.priorWeight
-            if successors.contains(words[i]) { score -= Tuning.successorBonus }
-            for accent in typedAccents where !words[i].contains(accent) { score += Tuning.lostAccent }
+            var score = d - Double(prior) / 255.0 * Tuning.priorWeight
+            if successors.contains(word) { score -= Tuning.successorBonus }
+            for accent in typedAccents where !word.contains(accent) { score += Tuning.lostAccent }
 
             // Dos palabras que se teclean igual («esta», «está») no son un
             // empate: gana la más usada, que ya lleva su ventaja en `score`.
             if score < bestScore {
                 if candidate != bestKeys { runnerUp = bestScore }
-                bestWord = words[i]
+                bestWord = word
                 bestKeys = candidate
                 bestDistance = d
                 bestScore = score
             } else if score < runnerUp, candidate != bestKeys {
                 runnerUp = score
+            }
+        }
+
+        if let only {
+            for raw in only {
+                let w = raw.lowercased()
+                guard w != lower, !w.contains(" "), let keys = SwipeAlphabet.encode(w),
+                      abs(keys.count - n) <= maxLengthGap else { continue }
+                candidate = keys
+                consider(w, prior: lex.prior(of: w, folded: SwipeLexicon.folded(keys)) ?? Tuning.guessPrior)
+            }
+        } else {
+            for i in 0..<lex.count {
+                let len = Int(lens[i])
+                if abs(len - n) > maxLengthGap { continue }
+                if (masks[i] ^ typedMask).nonzeroBitCount > 4 { continue }
+                if words[i] == lower { continue }
+
+                let s = Int(starts[i])
+                candidate.removeAll(keepingCapacity: true)
+                for k in 0..<len { candidate.append(flat[s + k]) }
+                consider(words[i], prior: priors[i])
             }
         }
 
@@ -184,14 +249,18 @@ enum SmartCorrector {
 
     // MARK: Ajustes
 
-    /// Medidos con `Tests` y con un banco de unas 3000 erratas generadas a
-    /// partir de las palabras más usadas (ver `SmartCorrectorTests`).
+    /// Medidos fuera del teclado con unas 2700 erratas generadas a partir de
+    /// las palabras más usadas y con una simulación de escritura de 6000
+    /// palabras de texto real (dedo con dispersión, letras de más o de menos,
+    /// espacios fallados, sin tildes). `SmartCorrectorTests` fija el resultado.
     enum Tuning {
         /// Distancia máxima según las letras tecleadas: en una palabra corta
         /// un solo cambio ya la convierte en otra.
         static func maxDistance(letters n: Int) -> Double {
             switch n {
-            case ...3: return 0.5
+            // Dos letras: sólo si el dedo cayó casi en la tecla vecina.
+            case ...2: return 0.4
+            case 3: return 0.5
             case 4: return 0.75
             case 5...6: return 0.9
             default: return 1.1
@@ -205,6 +274,8 @@ enum SmartCorrector {
         static let priorWeight = 0.55
         static let successorBonus = 0.45
         static let tieMargin = 0.08
+        /// Prior de una sugerencia del sistema que no está en el vocabulario.
+        static let guessPrior: UInt8 = 60
         /// Por cada tilde tecleada que la candidata no tiene.
         static let lostAccent = 0.25
     }

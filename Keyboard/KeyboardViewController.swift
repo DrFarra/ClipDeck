@@ -1817,7 +1817,17 @@ final class KeyboardViewController: UIInputViewController {
         input.seenWords = Set(words.map { $0.lowercased() })
         let primary = dominantLanguage(words.suffix(12))
         return SmartCorrector.correction(input, lexicon: lex,
-                                         spelling: { spelling(of: $0, primary: primary) })
+                                         spelling: { spelling(of: $0, primary: primary) },
+                                         guesses: { guesses(for: $0, primary: primary) })
+    }
+
+    /// Sugerencias del corrector del sistema, primero las del idioma del texto.
+    private static func guesses(for word: String, primary: String?) -> [String] {
+        let range = NSRange(location: 0, length: word.utf16.count)
+        let languages = (primary.map { [$0] } ?? []) + checkerLanguages.filter { $0 != primary }
+        return languages.flatMap {
+            sharedChecker.guesses(forWordRange: range, in: word, language: $0)?.prefix(6) ?? []
+        }
     }
 
     private static func isValid(_ word: String, language: String) -> Bool {

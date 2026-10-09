@@ -11,19 +11,23 @@ final class SmartCorrectorTests: XCTestCase {
     private let lexicon = SwipeLexicon.makeSnapshot([
         ("que", 230), ("como", 225), ("hola", 220), ("bien", 215), ("casa", 200), ("cosa", 200),
         ("tiene", 200), ("vamos", 200), ("hacer", 200), ("cómo", 200), ("también", 190),
-        ("estás", 190), ("llamar", 180), ("niño", 170), ("canción", 160), ("silla", 150),
-        ("estas", 150), ("mañana", 190), ("gracias", 210),
+        ("llamar", 180), ("niño", 170), ("canción", 160), ("silla", 150), ("mañana", 190),
+        ("gracias", 210), ("de", 230), ("en", 228), ("el", 228),
+        // Prior real (230 − 13·ln puesto) de pares con y sin tilde.
+        ("años", 167), ("anos", 111), ("más", 183), ("mas", 152),
+        ("está", 190), ("esta", 180), ("estás", 178), ("estas", 160),
     ])
 
     /// Palabras que el «corrector del sistema» da por buenas.
     private let valid: Set<String> = [
         "que", "como", "hola", "bien", "casa", "cosa", "tiene", "vamos", "hacer", "cómo",
         "también", "estás", "llamar", "niño", "canción", "silla", "estas", "mañana", "gracias",
+        "de", "en", "el", "años", "anos", "más", "mas", "está", "esta",
     ]
 
     private func correct(_ word: String, midSentence: Bool = false, seen: Set<String> = [],
                          spelling: SmartCorrector.Spelling? = nil,
-                         known: Set<String> = []) -> String? {
+                         known: Set<String> = [], protected: Set<String> = []) -> String? {
         var input = SmartCorrector.Input(word: word)
         input.midSentence = midSentence
         input.seenWords = seen
@@ -36,6 +40,7 @@ final class SmartCorrectorTests: XCTestCase {
                 return .unknown
             },
             isKnown: { known.contains($0) },
+            isProtected: { protected.contains($0) },
             successors: { _ in [] })
     }
 
@@ -120,8 +125,53 @@ final class SmartCorrectorTests: XCTestCase {
         input.touches = [key("c"), CGPoint(x: (s.x + a.x) / 2, y: s.y), s, a]
         let result = SmartCorrector.correction(input, lexicon: lexicon,
                                                spelling: { _ in .unknown },
-                                               isKnown: { _ in false }, successors: { _ in [] })
+                                               isKnown: { _ in false }, isProtected: { _ in false },
+                                               successors: { _ in [] })
         XCTAssertEqual(result, "casa")
+    }
+
+    func testTildeEnPalabraQueExisteSinElla() {
+        XCTAssertEqual(correct("anos"), "años")         // 74 veces más usada
+        XCTAssertEqual(correct("mas"), "más")
+        XCTAssertEqual(correct("Mas"), "Más")
+        XCTAssertNil(correct("esta"))                   // las dos se usan mucho
+        XCTAssertNil(correct("estas"))
+        // Escrita así antes no basta: el corrector anterior no la tocaba.
+        XCTAssertEqual(correct("mas", known: ["mas"]), "más")
+        XCTAssertNil(correct("mas", protected: ["mas"])) // deshizo la corrección
+    }
+
+    func testDosLetrasSoloConElDedoEnLaFrontera() {
+        let g = SmartCorrector.Geometry.qwerty
+        func key(_ c: Character) -> CGPoint { g[SwipeAlphabet.index(c)!]! }
+        func two(_ word: String, _ touches: [CGPoint]) -> String? {
+            var input = SmartCorrector.Input(word: word)
+            input.touches = touches
+            return SmartCorrector.correction(input, lexicon: lexicon, spelling: { _ in .unknown },
+                                             isKnown: { _ in false }, isProtected: { _ in false },
+                                             successors: { _ in [] })
+        }
+        let d = key("d"), r = key("r"), e = key("e")
+        // «dr» con el dedo clavado en la «r»: no se toca.
+        XCTAssertNil(two("dr", [d, r]))
+        // Con el dedo entre la «r» y la «e»: era «de».
+        XCTAssertEqual(two("dr", [d, CGPoint(x: (r.x + e.x) / 2 + 0.05, y: r.y)]), "de")
+    }
+
+    func testSugerenciasDelSistemaParaPalabrasRaras() {
+        var input = SmartCorrector.Input(word: "toponimo")
+        input.midSentence = true
+        let guessed = SmartCorrector.correction(input, lexicon: lexicon, spelling: { _ in .unknown },
+                                                isKnown: { _ in false }, isProtected: { _ in false },
+                                                guesses: { _ in ["topónimo", "topónimos"] },
+                                                successors: { _ in [] })
+        XCTAssertEqual(guessed, "topónimo")
+        // Una sugerencia lejana de lo tecleado no se acepta.
+        input.word = "xqzt"
+        let far = SmartCorrector.correction(input, lexicon: lexicon, spelling: { _ in .unknown },
+                                            isKnown: { _ in false }, isProtected: { _ in false },
+                                            guesses: { _ in ["casa"] }, successors: { _ in [] })
+        XCTAssertNil(far)
     }
 
     func testPriorPorFrecuencia() {

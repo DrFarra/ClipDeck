@@ -96,8 +96,17 @@ final class SwipeLexicon {
         /// Palabra sin tildes (como se teclea) → índice de la más probable.
         /// Sólo las frecuentes: sirve para separar palabras pegadas.
         let index: [String: Int32]
+        /// Las frecuentes que pierden su forma tecleada ante otra más usada
+        /// («anos» ante «años», «mas» ante «más»), con su prior.
+        let rivals: [String: UInt8]
 
         var count: Int { words.count }
+
+        /// Prior de una palabra frecuente, o nil si no está entre las frecuentes.
+        func prior(of word: String, folded: String) -> UInt8? {
+            if let hit = lookup(folded: folded), hit.word == word { return hit.prior }
+            return rivals[word]
+        }
 
         /// La palabra más probable que se teclea así («estas» → «estás» o
         /// «estas», la que más se use).
@@ -166,14 +175,18 @@ final class SwipeLexicon {
 
         func finish() -> Snapshot {
             var index: [String: Int32] = [:]
+            var keys: [Int: String] = [:]
             for i in words.indices where priors[i] >= SwipeLexicon.indexedPrior {
                 let s = Int(starts[i])
                 let key = SwipeLexicon.folded(Array(flat[s..<(s + Int(lens[i]))]))
+                keys[i] = key
                 if let old = index[key], priors[Int(old)] >= priors[i] { continue }
                 index[key] = Int32(i)
             }
-            return Snapshot(words: words, flat: flat, starts: starts, lens: lens,
-                            masks: masks, priors: priors, hasSystemWords: hasSystemWords, index: index)
+            var rivals: [String: UInt8] = [:]
+            for (i, key) in keys where index[key] != Int32(i) { rivals[words[i]] = priors[i] }
+            return Snapshot(words: words, flat: flat, starts: starts, lens: lens, masks: masks,
+                            priors: priors, hasSystemWords: hasSystemWords, index: index, rivals: rivals)
         }
     }
 
