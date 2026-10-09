@@ -104,6 +104,22 @@ enum TextRules {
         return tail
     }
 
+    /// Como `trailingSeparators`, pero admite que ya se empezó la palabra
+    /// siguiente («dijo hla d»): devuelve todo lo escrito tras `original`
+    /// (« d») para reponerlo detrás de la corrección.
+    static func textAfterCorrectable(_ original: String, in before: String) -> String? {
+        let partial = before.reversed().prefix { $0.isLetter || $0.isNumber }.count
+        guard let tail = trailingSeparators(after: original, in: String(before.dropLast(partial))) else {
+            return nil
+        }
+        return tail + before.suffix(partial)
+    }
+
+    /// Las palabras de un texto, sin signos.
+    static func words(in text: String) -> [String] {
+        text.components(separatedBy: wordSeparators).filter { !$0.isEmpty }
+    }
+
     /// Para buscar sin distinguir tildes ni mayúsculas.
     static func fold(_ text: String) -> String {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)

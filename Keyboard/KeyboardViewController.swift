@@ -1715,44 +1715,42 @@ final class KeyboardViewController: UIInputViewController {
         }
         autoSpaceInserted = false
 
-        let plain = TextRules.isPlainWord(word)
-        let lower = word.lowercased()
-        // No se corrige: lo recién escrito deslizando (ya es del vocabulario),
-        // lo que el usuario acaba de deshacer ni los nombres de sus contactos.
-        let doCorrect = plain && correctionActive && word != swiped
-            && lower != keepAsTyped && !lexiconWords.contains(lower)
-        let doLearn = plain && learningActive && word != swiped
-        let smart = config.smartCorrect
-        let touches = wordTouches
-        let centers = swipeCenters
-        let keySize = swipeKeySize
+        let doLearn = TextRules.isPlainWord(word) && learningActive && word != swiped
+        let job = correctionJob(for: word, before: before, swiped: swiped, keepAsTyped: keepAsTyped)
+        // Lo que ya se decidió mientras se escribía (lo que enseña la barra).
+        let planned = plannedCorrection?.word == word ? plannedCorrection : nil
+        plannedCorrection = nil
         let epoch = documentEpoch
         wordTouches.removeAll(keepingCapacity: true)
 
-        func correction() -> String? {
-            guard doCorrect else { return nil }
-            if smart, SwipeLexicon.shared.isLoaded {
-                return SmartCorrector.correction(for: word, touches: touches,
-                                                 keyCenters: centers, keySize: keySize,
-                                                 previous: previous)
+        func learn(_ finalWord: String) {
+            guard doLearn else { return }
+            Self.textQueue.async {
+                // Una corrección puede separar dos palabras («hola que»).
+                for part in finalWord.split(separator: " ") { WordLearner.learn(String(part)) }
+                let first = finalWord.split(separator: " ").first.map(String.init) ?? finalWord
+                if !previous.isEmpty { WordLearner.learnBigram(previous: previous, next: first) }
             }
-            return KeyboardViewController.autocorrection(for: word)
         }
 
-        // «Buscar», «Enviar», «Ir»…: el salto de línea envía en el acto y una
-        // corrección que llegara después ya no se aplicaría. Ésta se espera.
+        // Corrección ya calculada (la que enseñaba la barra) o, al enviar con
+        // «Buscar», «Enviar», «Ir»…, una que no puede esperar: el salto de
+        // línea envía en el acto y una corrección posterior ya no llegaría.
         let submits = separator == "\n" && (textDocumentProxy.returnKeyType ?? .default) != .default
-        if submits, doCorrect, let fix = Self.textQueue.sync(execute: correction) {
+        var fix: String?
+        if let job {
+            if let planned {
+                fix = planned.fix
+            } else if submits {
+                fix = Self.textQueue.sync { Self.runCorrection(job) }
+            }
+        }
+        if let fix {
             deleteBack(word.count)
             put(fix + separator)
             pendingRevert = Revert(original: word, fixed: fix, tail: separator)
             updateShiftFromContext()
-            if doLearn {
-                Self.textQueue.async {
-                    WordLearner.learn(fix)
-                    if !previous.isEmpty { WordLearner.learnBigram(previous: previous, next: fix) }
-                }
-            }
+            learn(fix)
             scheduleSuggestions()
             return
         }
@@ -1762,26 +1760,101 @@ final class KeyboardViewController: UIInputViewController {
         put(separator)
         updateShiftFromContext()
 
-        if doCorrect || doLearn {
-            // Corrector y aprendizaje en segundo plano; sólo el reemplazo del
-            // texto vuelve al hilo principal, y sólo si hace falta.
+        if let job, planned == nil, !submits {
+            // Se escribió más rápido que la barra: corrección en segundo plano;
+            // sólo el reemplazo del texto vuelve al hilo principal.
             Self.textQueue.async { [weak self] in
-                let fix = correction()
-                if doLearn {
-                    let finalWord = fix ?? word
-                    WordLearner.learn(finalWord)
-                    if !previous.isEmpty {
-                        WordLearner.learnBigram(previous: previous, next: finalWord)
-                    }
-                }
-                guard let fix else { return }
+                let fix = Self.runCorrection(job)
                 DispatchQueue.main.async {
-                    guard let self, self.documentEpoch == epoch else { return }
+                    guard let self else { return }
+                    learn(fix ?? word)
+                    guard let fix, self.documentEpoch == epoch else { return }
                     self.applyCorrection(original: word, fixed: fix)
                 }
             }
+        } else {
+            learn(word)
         }
         scheduleSuggestions()
+    }
+
+    // MARK: Autocorrector
+
+    /// Lo que necesita el autocorrector para decidir sobre `word`, leído en
+    /// el hilo principal. nil si esa palabra no se corrige: lo recién escrito
+    /// deslizando (ya es del vocabulario), lo que el usuario acaba de deshacer,
+    /// los nombres de sus contactos y sus sustituciones de texto.
+    private struct CorrectionJob {
+        var input: SmartCorrector.Input
+        /// El texto antes de la palabra.
+        let context: String
+        let smart: Bool
+    }
+
+    private func correctionJob(for word: String, before: String,
+                               swiped: String?, keepAsTyped: String?) -> CorrectionJob? {
+        let lower = word.lowercased()
+        guard TextRules.isPlainWord(word), correctionActive, word != swiped, lower != keepAsTyped,
+              !lexiconWords.contains(lower), replacements[lower] == nil,
+              before.hasSuffix(word) else { return nil }
+        let head = String(before.dropLast(word.count))
+        let input = SmartCorrector.Input(word: word,
+                                         previous: TextRules.lastCompleteWord(in: head),
+                                         touches: wordTouches,
+                                         keyCenters: swipeCenters,
+                                         keySize: swipeKeySize,
+                                         midSentence: !TextRules.startsSentence(head))
+        return CorrectionJob(input: input, context: head, smart: config.smartCorrect)
+    }
+
+    /// Decide la corrección (en `textQueue`: usa el corrector del sistema).
+    private static func runCorrection(_ job: CorrectionJob) -> String? {
+        guard job.smart, let lex = SwipeLexicon.shared.snapshot else {
+            return autocorrection(for: job.input.word)
+        }
+        var input = job.input
+        let words = TextRules.words(in: job.context)
+        input.seenWords = Set(words.map { $0.lowercased() })
+        let primary = dominantLanguage(words.suffix(12))
+        return SmartCorrector.correction(input, lexicon: lex,
+                                         spelling: { spelling(of: $0, primary: primary) })
+    }
+
+    private static func isValid(_ word: String, language: String) -> Bool {
+        let range = NSRange(location: 0, length: word.utf16.count)
+        return sharedChecker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0,
+                                                   wrap: false, language: language).location == NSNotFound
+    }
+
+    /// En qué idioma se está escribiendo, por las últimas palabras que sólo
+    /// existen en uno. nil si no está claro (entonces vale cualquiera).
+    private static func dominantLanguage(_ words: ArraySlice<String>) -> String? {
+        let languages = checkerLanguages
+        guard languages.count > 1 else { return languages.first }
+        var votes = [Int](repeating: 0, count: languages.count)
+        for w in words where w.count >= 2 && TextRules.isPlainWord(w) {
+            let valid = languages.indices.filter { isValid(w, language: languages[$0]) }
+            if valid.count == 1 { votes[valid[0]] += 1 }
+        }
+        guard let best = votes.indices.max(by: { votes[$0] < votes[$1] }), votes[best] >= 2 else { return nil }
+        let others = votes.indices.filter { $0 != best }.map { votes[$0] }.max() ?? 0
+        return votes[best] > 2 * others ? languages[best] : nil
+    }
+
+    /// Qué dice el corrector del sistema de la palabra tal cual.
+    private static func spelling(of word: String, primary: String?) -> SmartCorrector.Spelling {
+        var other = false
+        for language in checkerLanguages where isValid(word, language: language) {
+            if primary == nil || language == primary { return .valid }
+            other = true
+        }
+        if other { return .otherLanguage }
+        let lower = word.lowercased()
+        let capitalized = lower.prefix(1).uppercased() + lower.dropFirst()
+        if capitalized != word, checkerLanguages.contains(where: { isValid(capitalized, language: $0) }) {
+            return .properNoun
+        }
+        return .unknown
     }
 
     /// Sustituye la palabra ya escrita por su corrección, respetando lo que el
@@ -1791,12 +1864,14 @@ final class KeyboardViewController: UIInputViewController {
     private func applyCorrection(original: String, fixed: String) {
         guard !searching else { return }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
-        // Lo escrito tras la palabra: sólo espacios y signos. Si ya empezó
-        // otra palabra o movió el cursor, no se toca nada.
-        guard let tail = TextRules.trailingSeparators(after: original, in: before) else { return }
+        // Lo escrito tras la palabra: espacios y signos y, si se escribe
+        // rápido, el principio de la siguiente palabra (antes ahí la
+        // corrección se perdía). Si movió el cursor, no se toca nada.
+        guard let tail = TextRules.textAfterCorrectable(original, in: before) else { return }
         deleteBack(original.count + tail.count)
         put(fixed + tail)
-        pendingRevert = Revert(original: original, fixed: fixed, tail: tail)
+        let separatorsOnly = tail.allSatisfy { TextRules.isSeparator($0) }
+        pendingRevert = separatorsOnly ? Revert(original: original, fixed: fixed, tail: tail) : nil
         scheduleSuggestions()
     }
 
@@ -1877,13 +1952,22 @@ final class KeyboardViewController: UIInputViewController {
         let lex = lexicon
         let shortcuts = correctionActive ? replacements : [:]
         let capNext = shift != .off
+        let word = TextRules.wordBefore(before)
+        // Con el cursor en medio de una palabra no hay nada que adelantar.
+        let insideWord = textDocumentProxy.documentContextAfterInput?.first?.isLetter == true
+        let job = word.isEmpty || insideWord ? nil : correctionJob(for: word, before: before, swiped: justSwiped,
+                                                                    keepAsTyped: noCorrectOnce)
         let work = DispatchWorkItem {
             let result = KeyboardViewController.computeSuggestions(before: before, lexicon: lex,
                                                                   replacements: shortcuts,
                                                                   capitalizeNext: capNext)
+            let planned = job.map { (word: $0.input.word, fix: KeyboardViewController.runCorrection($0)) }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.mode == .keys, !self.searching else { return }
-                self.setSuggestions(result.words, nextWords: result.next)
+                // La palabra cambió mientras se calculaba: lo decidido ya no vale.
+                let current = self.currentWord()
+                self.setSuggestions(result.words, nextWords: result.next,
+                                    correction: planned?.word == current ? planned : nil)
             }
         }
         suggestionWork = work
@@ -1963,13 +2047,29 @@ final class KeyboardViewController: UIInputViewController {
     /// La barra muestra la palabra siguiente: tocarla no reemplaza nada.
     private var suggestionsAreNextWords = false
 
-    private func setSuggestions(_ words: [String], nextWords: Bool = false) {
+    /// Corrección decidida para la palabra en curso mientras se escribía. La
+    /// barra la enseña («tal cual» a la izquierda, la corrección resaltada en
+    /// el centro) y el espacio aplica justo eso, en el acto: lo que se ve es
+    /// lo que pasa, y no hay que esperar al corrector tras cada palabra.
+    /// `fix == nil`: se decidió no tocarla.
+    private var plannedCorrection: (word: String, fix: String?)?
+
+    private func setSuggestions(_ words: [String], nextWords: Bool = false,
+                                correction: (word: String, fix: String?)? = nil) {
         guard !searching else { return }
         suggestionsAreNextWords = nextWords
+        plannedCorrection = correction
         var titles = words
         var paste: PasteChipView.Kind?
+        var emphasized: Int?
         if mode == .keys, let revert = validRevert() {
             titles = ["↺ " + revert.original] + Array(words.prefix(2))
+        } else if mode == .keys, let correction, let fix = correction.fix {
+            // Como iOS: lo tecleado entre comillas para dejarlo así, y en el
+            // centro, resaltado, lo que pondrá el espacio.
+            let others = words.filter { $0.lowercased() != fix.lowercased() }
+            titles = [Self.keepTitle(correction.word), fix] + others.prefix(1)
+            emphasized = 1
         } else if mode == .keys, currentWord().isEmpty, let kind = recentPasteKind() {
             // Lo recién copiado ocupa la barra entera: nada de predicciones al lado.
             paste = kind
@@ -1980,17 +2080,28 @@ final class KeyboardViewController: UIInputViewController {
         if let paste { pasteChip.show(paste) } else { pasteChip.isHidden = true }
         for (i, b) in suggestionButtons.enumerated() {
             b.text = i < titles.count ? titles[i] : ""
+            b.emphasized = i == emphasized
         }
         for (i, sep) in separatorViews.enumerated() {
             sep.isHidden = (i + 1) >= titles.count
         }
     }
 
+    /// Título de la opción «dejarlo como lo escribí».
+    private static func keepTitle(_ word: String) -> String { "«" + word + "»" }
+
     private func applySuggestionWord(_ title: String) {
         keyFeedback()
         wordTouches.removeAll(keepingCapacity: true)
         if title.hasPrefix("↺ ") {
             undoAutocorrect(fromBackspace: false)
+            return
+        }
+        if let planned = plannedCorrection, planned.fix != nil, title == Self.keepTitle(planned.word) {
+            // «Así lo quiero»: se deja tal cual y no se vuelve a corregir.
+            WordLearner.protect(planned.word)
+            noCorrectOnce = planned.word.lowercased()
+            commit(" ", feedback: false)
             return
         }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
@@ -3800,6 +3911,10 @@ final class SuggestionButton: UIView {
     }
     var onTap: ((String) -> Void)?
     var onLongPress: ((String) -> Void)?
+    /// La corrección que aplicará el espacio: en negrita y con el color de acento.
+    var emphasized = false {
+        didSet { if emphasized != oldValue { applyTheme() } }
+    }
 
     private let label = UILabel()
     private var longTimer: Timer?
@@ -3820,7 +3935,8 @@ final class SuggestionButton: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     func applyTheme() {
-        label.textColor = KeyStyle.theme.text
+        label.textColor = emphasized ? KeyStyle.theme.accent : KeyStyle.theme.text
+        label.font = .systemFont(ofSize: 17, weight: emphasized ? .semibold : .regular)
     }
 
     override func layoutSubviews() {

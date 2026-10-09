@@ -93,8 +93,26 @@ final class SwipeLexicon {
         let priors: [UInt8]
         /// true si se pudo cargar el diccionario del sistema (no sólo el mínimo).
         let hasSystemWords: Bool
+        /// Palabra sin tildes (como se teclea) → índice de la más probable.
+        /// Sólo las frecuentes: sirve para separar palabras pegadas.
+        let index: [String: Int32]
 
         var count: Int { words.count }
+
+        /// La palabra más probable que se teclea así («estas» → «estás» o
+        /// «estas», la que más se use).
+        func lookup(folded: String) -> (word: String, prior: UInt8)? {
+            guard let i = index[folded] else { return nil }
+            return (words[Int(i)], priors[Int(i)])
+        }
+    }
+
+    /// Prior mínimo para entrar en `Snapshot.index`.
+    static let indexedPrior: UInt8 = 100
+
+    /// Texto con las letras de las teclas («canción» → «cancion»).
+    static func folded(_ keys: [UInt8]) -> String {
+        String(keys.map { SwipeAlphabet.letters[Int($0)] })
     }
 
     private var current: Snapshot?
@@ -147,9 +165,39 @@ final class SwipeLexicon {
         }
 
         func finish() -> Snapshot {
-            Snapshot(words: words, flat: flat, starts: starts, lens: lens,
-                     masks: masks, priors: priors, hasSystemWords: hasSystemWords)
+            var index: [String: Int32] = [:]
+            for i in words.indices where priors[i] >= SwipeLexicon.indexedPrior {
+                let s = Int(starts[i])
+                let key = SwipeLexicon.folded(Array(flat[s..<(s + Int(lens[i]))]))
+                if let old = index[key], priors[Int(old)] >= priors[i] { continue }
+                index[key] = Int32(i)
+            }
+            return Snapshot(words: words, flat: flat, starts: starts, lens: lens,
+                            masks: masks, priors: priors, hasSystemWords: hasSystemWords, index: index)
         }
+    }
+
+    /// Vocabulario armado a partir de una lista (pruebas).
+    static func makeSnapshot(_ entries: [(word: String, prior: UInt8)]) -> Snapshot {
+        var builder = Builder()
+        for e in entries { builder.add(e.word, prior: e.prior) }
+        return builder.finish()
+    }
+
+    /// Prior según el puesto en una lista de frecuencia de uso: lo más usado
+    /// pesa más, con caída logarítmica (la 100 y la 200 apenas se distinguen;
+    /// la 10 y la 10000, mucho).
+    static func frequencyPrior(rank: Int, top: Double, floor: Double) -> UInt8 {
+        let value = top - 13 * log(Double(max(rank, 1)))
+        return UInt8(min(max(value, floor), top))
+    }
+
+    /// Lista de frecuencia incluida en el teclado (una palabra por línea, de
+    /// la más usada a la menos). Fuera del teclado no está y no se usa.
+    private static func frequencyList(_ name: String) -> [String] {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "txt"),
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        return text.split(separator: "\n").map(String.init)
     }
 
     /// Carga el vocabulario en memoria. Pesado: llamar en segundo plano.
@@ -163,10 +211,20 @@ final class SwipeLexicon {
         for (w, c) in WordLearner.learnedWords() where c >= WordLearner.minUses {
             builder.add(w, prior: UInt8(min(200 + c * 4, 255)))
         }
-        // 2. Palabras de uso diario.
+        // 2. Frecuencia de uso real (subtítulos, filtrada con diccionario: sin
+        //    nombres propios). Antes el orden lo daba la posición en los
+        //    completados del sistema, que no dice qué palabra se usa más, y el
+        //    corrector elegía entre candidatas casi a ciegas.
+        for (i, w) in Self.frequencyList("frecuencias-es").enumerated() {
+            builder.add(w, prior: Self.frequencyPrior(rank: i + 1, top: 230, floor: 100))
+        }
+        for (i, w) in Self.frequencyList("frecuencias-en").enumerated() {
+            builder.add(w, prior: Self.frequencyPrior(rank: i + 1, top: 195, floor: 80))
+        }
+        // 3. Palabras de uso diario (si no venían ya en las listas).
         for w in KbData.commonWords { builder.add(w, prior: 190) }
 
-        // 3. Diccionario del sistema recolectado por la app. Se recorre por
+        // 4. Diccionario del sistema recolectado por la app. Se recorre por
         //    bytes: convertir 800 KB a String y recorrerlo carácter a carácter
         //    era mucho más lento que separar por saltos de línea en crudo.
         builder.trackSeen = false
