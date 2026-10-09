@@ -191,10 +191,10 @@ enum SmartCorrector {
         /// un solo cambio ya la convierte en otra.
         static func maxDistance(letters n: Int) -> Double {
             switch n {
-            case ...3: return 0.6
+            case ...3: return 0.5
             case 4: return 0.75
-            case 5...6: return 1.0
-            default: return 1.25
+            case 5...6: return 0.9
+            default: return 1.1
             }
         }
         static let otherLanguageFactor = 0.6
@@ -204,7 +204,7 @@ enum SmartCorrector {
         static let nameFactor = 0.45
         static let priorWeight = 0.55
         static let successorBonus = 0.45
-        static let tieMargin = 0.12
+        static let tieMargin = 0.08
         /// Por cada tilde tecleada que la candidata no tiene.
         static let lostAccent = 0.25
     }
@@ -363,7 +363,7 @@ enum SmartCorrector {
         func missing(_ candidate: [UInt8], _ j: Int) -> Double {
             if j > 0, candidate[j] == candidate[j - 1] { return 0.5 }   // «ll», «rr», «cc»
             if candidate[j] == SmartCorrector.hKey { return 0.55 }     // la «h» no suena
-            return 1.0
+            return 0.85     // al escribir rápido se come una letra más que cambiarla
         }
 
         func substitution(_ i: Int, _ target: UInt8) -> Double {

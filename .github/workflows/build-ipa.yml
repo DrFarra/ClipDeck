@@ -55,6 +55,10 @@ jobs:
         run: |
           APP_PATH="build/Build/Products/Release-iphoneos/ClipDeck.app"
           ls -la "$(dirname "$APP_PATH")"
+          # El autocorrector necesita sus listas de frecuencia dentro del teclado.
+          for f in frecuencias-es.txt frecuencias-en.txt; do
+            test -s "$APP_PATH/PlugIns/ClipDeckKeyboard.appex/$f" || { echo "Falta $f en el teclado"; exit 1; }
+          done
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
           zip -qry ClipDeck-unsigned.ipa Payload
