@@ -1,0 +1,221 @@
+import XCTest
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
+
+// El autocorrector con un vocabulario pequeño y un «diccionario del sistema»
+// de mentira: lo que se prueba es la decisión, no los datos.
+
+final class SmartCorrectorTests: XCTestCase {
+
+    private let lexicon = SwipeLexicon.makeSnapshot([
+        ("que", 230), ("como", 225), ("hola", 220), ("bien", 215), ("casa", 200), ("cosa", 200),
+        ("tiene", 200), ("vamos", 200), ("hacer", 200), ("cómo", 200), ("también", 190),
+        ("llamar", 180), ("niño", 170), ("canción", 160), ("silla", 150), ("mañana", 190),
+        ("gracias", 210), ("de", 230), ("en", 228), ("el", 228),
+        // Prior real (230 − 13·ln puesto) de pares con y sin tilde.
+        ("años", 167), ("anos", 111), ("más", 183), ("mas", 152),
+        ("está", 190), ("esta", 180), ("estás", 178), ("estas", 160),
+    ])
+
+    /// Palabras que el «corrector del sistema» da por buenas.
+    private let valid: Set<String> = [
+        "que", "como", "hola", "bien", "casa", "cosa", "tiene", "vamos", "hacer", "cómo",
+        "también", "estás", "llamar", "niño", "canción", "silla", "estas", "mañana", "gracias",
+        "de", "en", "el", "años", "anos", "más", "mas", "está", "esta",
+    ]
+
+    private func correct(_ word: String, midSentence: Bool = false, seen: Set<String> = [],
+                         spelling: SmartCorrector.Spelling? = nil,
+                         known: Set<String> = [], protected: Set<String> = []) -> String? {
+        var input = SmartCorrector.Input(word: word)
+        input.midSentence = midSentence
+        input.seenWords = seen
+        return SmartCorrector.correction(
+            input, lexicon: lexicon,
+            spelling: { w in
+                if let spelling { return spelling }
+                if self.valid.contains(w.lowercased()) { return .valid }
+                if w.lowercased() == "carlos" { return .properNoun }
+                return .unknown
+            },
+            isKnown: { known.contains($0) },
+            isProtected: { protected.contains($0) },
+            successors: { _ in [] })
+    }
+
+    func testTeclaVecina() {
+        XCTAssertEqual(correct("hols"), "hola")
+        XCTAssertEqual(correct("Hols"), "Hola")
+    }
+
+    func testRecuperaTildesYEnie() {
+        XCTAssertEqual(correct("tambien"), "también")
+        XCTAssertEqual(correct("cancion"), "canción")
+        XCTAssertEqual(correct("nino"), "niño")
+        XCTAssertEqual(correct("manana"), "mañana")
+    }
+
+    func testErroresDeEscrituraRapida() {
+        XCTAssertEqual(correct("caasa"), "casa")        // la misma tecla dos veces
+        XCTAssertEqual(correct("hloa"), "hola")         // dos letras cambiadas
+        XCTAssertEqual(correct("lamar"), "llamar")      // la doble que se queda en una
+    }
+
+    func testErroresDeOrtografia() {
+        XCTAssertEqual(correct("acer"), "hacer")        // la «h» que no suena
+        XCTAssertEqual(correct("bamos"), "vamos")       // b/v
+    }
+
+    func testPalabrasPegadas() {
+        XCTAssertEqual(correct("holaque"), "hola que")
+        XCTAssertEqual(correct("holabque"), "hola que") // la «b» en lugar del espacio
+        XCTAssertEqual(correct("Holaque"), "Hola que")
+    }
+
+    func testNoTocaLoBienEscrito() {
+        XCTAssertNil(correct("hola"))
+        XCTAssertNil(correct("estas"))
+        XCTAssertNil(correct("Gracias"))
+    }
+
+    func testRespetaJergaYRisas() {
+        for w in ["jaja", "jajaja", "jejeje", "jsjsjs", "xd", "porfa", "finde", "ok"] {
+            XCTAssertNil(correct(w), w)
+        }
+        XCTAssertTrue(SmartCorrector.isChatWord("jajajaj"))
+        XCTAssertFalse(SmartCorrector.isChatWord("jose"))
+    }
+
+    func testNombrePropioLlevaMayuscula() {
+        XCTAssertEqual(correct("carlos"), "Carlos")
+    }
+
+    func testNombreAMitadDeFraseNoSeCambia() {
+        // «Hols» con mayúscula a mitad de frase: probablemente un nombre.
+        XCTAssertNil(correct("Hols", midSentence: true))
+        XCTAssertEqual(correct("hols", midSentence: true), "hola")
+    }
+
+    func testMayusculaDeMas() {
+        XCTAssertEqual(correct("HOla"), "Hola")
+        XCTAssertEqual(correct("HOls"), "Hola")
+        XCTAssertNil(correct("ONU"))                    // siglas
+    }
+
+    func testLoQueElUsuarioYaUsaNoSeCorrige() {
+        XCTAssertNil(correct("hols", seen: ["hols"]))   // ya está así en el texto
+        XCTAssertNil(correct("hols", known: ["hols"]))  // aprendida o protegida
+    }
+
+    func testOtroIdiomaSoloConErrataClarisima() {
+        XCTAssertEqual(correct("casq"), "casa")
+        XCTAssertNil(correct("casq", spelling: .otherLanguage))
+        XCTAssertEqual(correct("tambien", spelling: .otherLanguage), "también")
+    }
+
+    func testDondeCayoElDedo() {
+        // «cssa» con el primer toque a medio camino entre la «s» y la «a».
+        let g = SmartCorrector.Geometry.qwerty
+        func key(_ c: Character) -> CGPoint { g[SwipeAlphabet.index(c)!]! }
+        var input = SmartCorrector.Input(word: "cssa")
+        input.keyCenters = g
+        input.keySize = CGSize(width: 1.0001, height: 1)
+        let s = key("s"), a = key("a")
+        input.touches = [key("c"), CGPoint(x: (s.x + a.x) / 2, y: s.y), s, a]
+        let result = SmartCorrector.correction(input, lexicon: lexicon,
+                                               spelling: { _ in .unknown },
+                                               isKnown: { _ in false }, isProtected: { _ in false },
+                                               successors: { _ in [] })
+        XCTAssertEqual(result, "casa")
+    }
+
+    func testTildeEnPalabraQueExisteSinElla() {
+        XCTAssertEqual(correct("anos"), "años")         // 74 veces más usada
+        XCTAssertEqual(correct("mas"), "más")
+        XCTAssertEqual(correct("Mas"), "Más")
+        XCTAssertNil(correct("esta"))                   // las dos se usan mucho
+        XCTAssertNil(correct("estas"))
+        // Escrita así antes no basta: el corrector anterior no la tocaba.
+        XCTAssertEqual(correct("mas", known: ["mas"]), "más")
+        XCTAssertNil(correct("mas", protected: ["mas"])) // deshizo la corrección
+    }
+
+    func testDosLetrasSoloConElDedoEnLaFrontera() {
+        let g = SmartCorrector.Geometry.qwerty
+        func key(_ c: Character) -> CGPoint { g[SwipeAlphabet.index(c)!]! }
+        func two(_ word: String, _ touches: [CGPoint]) -> String? {
+            var input = SmartCorrector.Input(word: word)
+            input.touches = touches
+            return SmartCorrector.correction(input, lexicon: lexicon, spelling: { _ in .unknown },
+                                             isKnown: { _ in false }, isProtected: { _ in false },
+                                             successors: { _ in [] })
+        }
+        let d = key("d"), r = key("r"), e = key("e")
+        // «dr» con el dedo clavado en la «r»: no se toca.
+        XCTAssertNil(two("dr", [d, r]))
+        // Con el dedo entre la «r» y la «e»: era «de».
+        XCTAssertEqual(two("dr", [d, CGPoint(x: (r.x + e.x) / 2 + 0.05, y: r.y)]), "de")
+    }
+
+    func testSugerenciasDelSistemaParaPalabrasRaras() {
+        var input = SmartCorrector.Input(word: "toponimo")
+        input.midSentence = true
+        let guessed = SmartCorrector.correction(input, lexicon: lexicon, spelling: { _ in .unknown },
+                                                isKnown: { _ in false }, isProtected: { _ in false },
+                                                guesses: { _ in ["topónimo", "topónimos"] },
+                                                successors: { _ in [] })
+        XCTAssertEqual(guessed, "topónimo")
+        // Una sugerencia lejana de lo tecleado no se acepta.
+        input.word = "xqzt"
+        let far = SmartCorrector.correction(input, lexicon: lexicon, spelling: { _ in .unknown },
+                                            isKnown: { _ in false }, isProtected: { _ in false },
+                                            guesses: { _ in ["casa"] }, successors: { _ in [] })
+        XCTAssertNil(far)
+    }
+
+    func testPriorPorFrecuencia() {
+        XCTAssertGreaterThan(SwipeLexicon.frequencyPrior(rank: 1, top: 230, floor: 100),
+                             SwipeLexicon.frequencyPrior(rank: 1000, top: 230, floor: 100))
+        XCTAssertEqual(SwipeLexicon.frequencyPrior(rank: 1_000_000, top: 230, floor: 100), 100)
+        XCTAssertEqual(lexicon.lookup(folded: "como")?.word, "como")   // la más usada de las dos
+    }
+}
+
+final class TextRulesCorrectionTests: XCTestCase {
+
+    func testCorreccionTardiaConLaSiguientePalabraEmpezada() {
+        XCTAssertEqual(TextRules.textAfterCorrectable("hla", in: "dijo hla "), " ")
+        XCTAssertEqual(TextRules.textAfterCorrectable("hla", in: "dijo hla qu"), " qu")
+        XCTAssertNil(TextRules.textAfterCorrectable("hla", in: "dijo hla"))
+        XCTAssertNil(TextRules.textAfterCorrectable("hla", in: "ahla qu"))
+    }
+
+    func testPalabrasDeUnTexto() {
+        XCTAssertEqual(TextRules.words(in: "Hola, ¿qué tal?  bien"), ["Hola", "qué", "tal", "bien"])
+    }
+}
+
+final class TypingStatsTests: XCTestCase {
+
+    func testSoloCuentaElTiempoEscribiendo() {
+        var t = TypingStats.Totals()
+        TypingStats.apply(.key, to: &t, gap: nil)
+        TypingStats.apply(.key, to: &t, gap: 0.25)
+        TypingStats.apply(.word, to: &t, gap: 0.3)
+        TypingStats.apply(.key, to: &t, gap: 40)          // una pausa: no cuenta
+        XCTAssertEqual(t.seconds, 0.55, accuracy: 1e-9)
+        XCTAssertEqual(t.keys, 3)
+        XCTAssertEqual(t.words, 1)
+        XCTAssertNil(t.wordsPerMinute)                   // menos de medio minuto
+    }
+
+    func testPalabrasPorMinutoYCorreccionesDeshechas() {
+        var t = TypingStats.Totals(words: 30, backspaces: 6, corrections: 4, undone: 1, seconds: 60)
+        XCTAssertEqual(t.wordsPerMinute ?? 0, 30, accuracy: 1e-9)
+        XCTAssertEqual(t.backspacesPerWord ?? 0, 0.2, accuracy: 1e-9)
+        XCTAssertEqual(t.undoneShare ?? 0, 0.25, accuracy: 1e-9)
+        TypingStats.apply(.undone, to: &t, gap: 1)
+        XCTAssertEqual(t.undone, 2)
+    }
+}

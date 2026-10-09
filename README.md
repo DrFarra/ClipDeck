@@ -73,3 +73,9 @@ Historial visual en mosaico de dos columnas · tarjetas por tipo (texto, enlace 
 ## Licencia
 
 MIT. Uso personal y modificación libres.
+
+Las listas de frecuencia del autocorrector (`Keyboard/frecuencias-es.txt` y
+`Keyboard/frecuencias-en.txt`) salen de [FrequencyWords](https://github.com/hermitdave/FrequencyWords)
+de Hermit Dave (subtítulos de OpenSubtitles 2018, licencia
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)), filtradas con los
+diccionarios de Hunspell para quitar nombres propios y erratas.

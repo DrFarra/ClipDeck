@@ -220,6 +220,16 @@ final class TextRulesTests: XCTestCase {
         XCTAssertEqual(TextRules.lastWordLength(in: "hola que  "), 5)
         XCTAssertEqual(TextRules.lastWordLength(in: "hola"), 4)
         XCTAssertEqual(TextRules.lastWordLength(in: "hola\nque"), 3)
+        // Justo detrás de un salto de línea se borra el salto.
+        XCTAssertEqual(TextRules.lastWordLength(in: "hola\n"), 1)
+        XCTAssertEqual(TextRules.lastWordLength(in: ""), 0)
+    }
+
+    func testRestoDeLaPalabraTrasElCursor() {
+        XCTAssertEqual(TextRules.wordAfter("la casa"), "la")
+        XCTAssertEqual(TextRules.wordAfter(" casa"), "")
+        XCTAssertEqual(TextRules.wordAfter("😂 jaja"), "")
+        XCTAssertEqual(TextRules.wordAfter("ción."), "ción")
     }
 
     func testCorreccionTardiaRespetaLoEscritoDetras() {

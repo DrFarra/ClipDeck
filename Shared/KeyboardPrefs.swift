@@ -252,6 +252,13 @@ enum WordLearner {
         return (wordsDict()[clean] ?? 0) >= minUses || protectedSet().contains(clean)
     }
 
+    /// El usuario deshizo su corrección: no se vuelve a tocar.
+    static func isProtected(_ word: String) -> Bool {
+        let clean = word.lowercased()
+        lock.lock(); defer { lock.unlock() }
+        return protectedSet().contains(clean)
+    }
+
     static func learn(_ word: String) {
         let clean = word.lowercased()
         guard clean.count >= 2, clean.count <= 24,

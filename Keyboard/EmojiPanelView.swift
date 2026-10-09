@@ -249,8 +249,12 @@ final class EmojiBarButton: UIView {
         addSubview(label)
         isMultipleTouchEnabled = false
         isExclusiveTouch = false
+        isAccessibilityElement = true
+        accessibilityTraits = .button
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    override func accessibilityActivate() -> Bool { onDown?(); onUp?(); return true }
 
     func setSymbol(_ names: [String], pointSize: CGFloat = 17) {
         let config = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
@@ -415,11 +419,13 @@ final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionView
 
         abcButton.isKey = true
         abcButton.setTitle("ABC")
+        abcButton.accessibilityLabel = "Teclado ABC"
         abcButton.onDown = { [weak self] in self?.backToKeys?() }
         bottomBar.addSubview(abcButton)
 
         deleteButton.isKey = true
         deleteButton.setSymbol(["delete.left"], pointSize: 18)
+        deleteButton.accessibilityLabel = "Borrar"
         deleteButton.onDown = { [weak self] in self?.deleteDown?() }
         deleteButton.onUp = { [weak self] in self?.deleteUp?() }
         bottomBar.addSubview(deleteButton)
