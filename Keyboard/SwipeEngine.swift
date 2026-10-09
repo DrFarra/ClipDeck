@@ -221,6 +221,8 @@ final class SwipeTrailView: UIView {
     private let shape = CAShapeLayer()
     private var points: [CGPoint] = []
     private let maxPoints = 46
+    /// Cada trazo nuevo invalida el desvanecido del anterior.
+    private var generation = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -241,6 +243,8 @@ final class SwipeTrailView: UIView {
     }
 
     func begin(at p: CGPoint) {
+        generation += 1
+        layer.removeAllAnimations()
         points = [p]
         alpha = 1
         isHidden = false
@@ -256,7 +260,10 @@ final class SwipeTrailView: UIView {
 
     /// Desvanece la estela sin cortarla de golpe.
     func finish() {
+        let current = generation
         UIView.animate(withDuration: 0.18, animations: { self.alpha = 0 }) { _ in
+            // Un trazo rápido ya empezó otro: no se borra su estela.
+            guard current == self.generation else { return }
             self.isHidden = true
             self.points = []
             self.shape.path = nil

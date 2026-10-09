@@ -57,7 +57,7 @@ enum TouchModel {
         let k = String(letter)
         lock.lock()
         var d = dict()
-        var entry = d[k] ?? [0, 0, 0]
+        var entry = d[k].flatMap { $0.count == 3 ? $0 : nil } ?? [0, 0, 0]
         let n = entry[2]
         // Media móvil: rápida al principio, estable después.
         let alpha = min(1.0, max(0.03, weight / (n + 1)))

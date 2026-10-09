@@ -25,6 +25,11 @@ enum TextRules {
         return text
     }
 
+    /// El resto de la palabra detrás del cursor (vacío si no está dentro de una).
+    static func wordAfter(_ text: String) -> String {
+        String(text.prefix { $0.isLetter || $0.isNumber })
+    }
+
     /// Última palabra completa antes del cursor (para predecir la siguiente),
     /// sin cruzar el final de una frase.
     static func lastCompleteWord(in before: String) -> String {
@@ -81,8 +86,9 @@ enum TextRules {
         var chars = Array(before)
         var count = 0
         while let last = chars.last, last == " " { chars.removeLast(); count += 1 }
-        while let last = chars.last, last != " ", last != "\n" { chars.removeLast(); count += 1 }
-        return count
+        while let last = chars.last, last != " ", !last.isNewline { chars.removeLast(); count += 1 }
+        // Justo detrás de un salto de línea: se borra el salto.
+        return count == 0 && !chars.isEmpty ? 1 : count
     }
 
     /// Lo que el usuario escribió detrás de `original` (espacio, «. », «?»…)

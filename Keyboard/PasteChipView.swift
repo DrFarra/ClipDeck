@@ -26,9 +26,13 @@ final class PasteChipView: UIView {
         label.lineBreakMode = .byTruncatingTail
         capsule.addSubview(label)
         isHidden = true
+        isAccessibilityElement = true
+        accessibilityTraits = .button
         applyTheme()
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    override func accessibilityActivate() -> Bool { onTap?(kind); return true }
 
     func show(_ kind: Kind) {
         self.kind = kind

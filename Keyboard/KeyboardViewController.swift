@@ -348,6 +348,8 @@ final class KeyboardViewController: UIInputViewController {
         applyTheme()
         popup.font = .systemFont(ofSize: CGFloat(config.fontSize) + 12, weight: .medium)
         rebuildKeys()
+        // Si al arrancar estaba desactivado, el vocabulario no se cargó.
+        if !swipeReady { prepareSwipe() }
         return true
     }
 
@@ -496,6 +498,9 @@ final class KeyboardViewController: UIInputViewController {
         wordTouches.removeAll(keepingCapacity: true)
         justSwiped = nil
         noCorrectOnce = nil
+        // Si no, borrar tras mover el cursor deshacía una corrección antigua.
+        pendingRevert = nil
+        autoSpaceInserted = false
         updateShiftFromContext(respectManual: true)
         scheduleSuggestions()
     }
@@ -1064,6 +1069,8 @@ final class KeyboardViewController: UIInputViewController {
             shift = (!searching && textDocumentProxy.autocapitalizationType == .allCharacters
                      && config.autoCapital && !fieldIsLiteral) ? .on : .off
             shiftByUser = false
+            // «OK» rápido (mayús, O, mayús) no es un doble toque: no bloquea.
+            lastShiftTap = .distantPast
             updateKeyCaps()
         }
         pendingRevert = nil
@@ -1300,7 +1307,7 @@ final class KeyboardViewController: UIInputViewController {
         if searching { keyFeedback(); appendToQuery(" "); return }
         let now = Date()
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
-        if config.doubleSpace,
+        if config.doubleSpace, !fieldIsLiteral,
            now.timeIntervalSince(lastSpaceTap) < 0.6,
            before.hasSuffix(" "),
            let previous = before.dropLast().last,
@@ -1481,6 +1488,7 @@ final class KeyboardViewController: UIInputViewController {
     /// modo trackpad.
     var swipeEnabled: Bool {
         config.swipe && swipeReady && !symbolsMode && !trackpadActive && numPad == nil && !searching
+            && !fieldIsLiteral   // usuarios, correos, URL: no son palabras del diccionario
     }
 
     /// Empieza un trazo. La letra que se insertó al tocar la tecla se retira,
@@ -1565,7 +1573,13 @@ final class KeyboardViewController: UIInputViewController {
         }
 
         let capitalize = startChar.first?.isUppercase == true
-        let word = capitalize ? best.prefix(1).uppercased() + best.dropFirst() : best
+        // Con bloqueo de mayúsculas (o campo «todo mayúsculas») va entera.
+        let allCaps = shift == .caps
+            || (textDocumentProxy.autocapitalizationType == .allCharacters && config.autoCapital)
+        func cased(_ w: String) -> String {
+            allCaps ? w.uppercased() : capitalize ? w.prefix(1).uppercased() + w.dropFirst() : w
+        }
+        let word = cased(best)
 
         // Separación automática con la palabra anterior, como en Gboard (pero
         // no detrás de «¿», «¡», un paréntesis o unas comillas de apertura).
@@ -1593,7 +1607,7 @@ final class KeyboardViewController: UIInputViewController {
         // Alternativas a un toque en la barra de sugerencias.
         var alternatives: [String] = []
         for w in words.dropFirst().prefix(3) {
-            alternatives.append(capitalize ? w.prefix(1).uppercased() + w.dropFirst() : w)
+            alternatives.append(cased(w))
         }
         if alternatives.isEmpty {
             scheduleSuggestions()
@@ -1693,11 +1707,6 @@ final class KeyboardViewController: UIInputViewController {
         }
         autoSpaceInserted = false
 
-        // El separador se inserta de inmediato: la escritura nunca espera al
-        // corrector ni al aprendizaje.
-        put(separator)
-        updateShiftFromContext()
-
         let plain = TextRules.isPlainWord(word)
         let lower = word.lowercased()
         // No se corrige: lo recién escrito deslizando (ya es del vocabulario),
@@ -1712,20 +1721,44 @@ final class KeyboardViewController: UIInputViewController {
         let epoch = documentEpoch
         wordTouches.removeAll(keepingCapacity: true)
 
+        func correction() -> String? {
+            guard doCorrect else { return nil }
+            if smart, SwipeLexicon.shared.isLoaded {
+                return SmartCorrector.correction(for: word, touches: touches,
+                                                 keyCenters: centers, keySize: keySize,
+                                                 previous: previous)
+            }
+            return KeyboardViewController.autocorrection(for: word)
+        }
+
+        // «Buscar», «Enviar», «Ir»…: el salto de línea envía en el acto y una
+        // corrección que llegara después ya no se aplicaría. Ésta se espera.
+        let submits = separator == "\n" && (textDocumentProxy.returnKeyType ?? .default) != .default
+        if submits, doCorrect, let fix = Self.textQueue.sync(execute: correction) {
+            deleteBack(word.count)
+            put(fix + separator)
+            pendingRevert = Revert(original: word, fixed: fix, tail: separator)
+            updateShiftFromContext()
+            if doLearn {
+                Self.textQueue.async {
+                    WordLearner.learn(fix)
+                    if !previous.isEmpty { WordLearner.learnBigram(previous: previous, next: fix) }
+                }
+            }
+            scheduleSuggestions()
+            return
+        }
+
+        // El separador se inserta de inmediato: la escritura nunca espera al
+        // corrector ni al aprendizaje.
+        put(separator)
+        updateShiftFromContext()
+
         if doCorrect || doLearn {
             // Corrector y aprendizaje en segundo plano; sólo el reemplazo del
             // texto vuelve al hilo principal, y sólo si hace falta.
             Self.textQueue.async { [weak self] in
-                var fix: String?
-                if doCorrect {
-                    if smart, SwipeLexicon.shared.isLoaded {
-                        fix = SmartCorrector.correction(for: word, touches: touches,
-                                                        keyCenters: centers, keySize: keySize,
-                                                        previous: previous)
-                    } else {
-                        fix = KeyboardViewController.autocorrection(for: word)
-                    }
-                }
+                let fix = correction()
                 if doLearn {
                     let finalWord = fix ?? word
                     WordLearner.learn(finalWord)
@@ -1842,20 +1875,21 @@ final class KeyboardViewController: UIInputViewController {
                                                                   capitalizeNext: capNext)
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.mode == .keys, !self.searching else { return }
-                self.setSuggestions(result)
+                self.setSuggestions(result.words, nextWords: result.next)
             }
         }
         suggestionWork = work
         Self.textQueue.asyncAfter(deadline: .now() + 0.08, execute: work)
     }
 
-    /// Cálculo puro (sin tocar UI) — seguro en segundo plano.
+    /// Cálculo puro (sin tocar UI) — seguro en segundo plano. `next` indica
+    /// que son la palabra siguiente, no completados de la que se escribe.
     private static func computeSuggestions(before: String, lexicon: [String],
                                            replacements: [String: String],
-                                           capitalizeNext: Bool) -> [String] {
+                                           capitalizeNext: Bool) -> (words: [String], next: Bool) {
         let word = TextRules.wordBefore(before)
         if word.isEmpty || word.rangeOfCharacter(from: .letters) == nil {
-            return nextWords(lastWord: TextRules.lastCompleteWord(in: before), capitalizeNext: capitalizeNext)
+            return (nextWords(lastWord: TextRules.lastCompleteWord(in: before), capitalizeNext: capitalizeNext), true)
         }
 
         let lower = word.lowercased()
@@ -1902,9 +1936,9 @@ final class KeyboardViewController: UIInputViewController {
         // Si la palabra en curso no tiene completados (p. ej. "xd"), proponemos
         // igualmente la próxima palabra probable en vez de dejar la barra vacía.
         if unique.isEmpty {
-            return nextWords(lastWord: word, capitalizeNext: capitalizeNext)
+            return (nextWords(lastWord: word, capitalizeNext: capitalizeNext), true)
         }
-        return unique
+        return (unique, false)
     }
 
     private static func nextWords(lastWord: String, capitalizeNext: Bool) -> [String] {
@@ -1918,8 +1952,12 @@ final class KeyboardViewController: UIInputViewController {
         return Array(r.prefix(3)).map { capitalizeNext ? $0.prefix(1).uppercased() + $0.dropFirst() : $0 }
     }
 
-    private func setSuggestions(_ words: [String]) {
+    /// La barra muestra la palabra siguiente: tocarla no reemplaza nada.
+    private var suggestionsAreNextWords = false
+
+    private func setSuggestions(_ words: [String], nextWords: Bool = false) {
         guard !searching else { return }
+        suggestionsAreNextWords = nextWords
         var titles = words
         var paste: PasteChipView.Kind?
         if mode == .keys, let revert = validRevert() {
@@ -1948,11 +1986,27 @@ final class KeyboardViewController: UIInputViewController {
             return
         }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        let after = textDocumentProxy.documentContextAfterInput ?? ""
         let current = TextRules.wordBefore(before)
-        let previous = current.isEmpty ? TextRules.lastCompleteWord(in: before) : TextRules.previousWord(in: before)
-        deleteBack(current.count)
-        put(title + " ")
-        autoSpaceInserted = true
+        let tail = suggestionsAreNextWords ? "" : TextRules.wordAfter(after)
+        let previous: String
+        if suggestionsAreNextWords {
+            // Va detrás de lo escrito («jaja 😂», «tengo 25», «xd»): antes se
+            // borraba como si fuera el comienzo de la palabra sugerida.
+            previous = TextRules.isPlainWord(current) ? current : TextRules.lastCompleteWord(in: before)
+            if let last = before.last, !last.isWhitespace, !TextRules.openingPunctuation.contains(last) {
+                put(" ")
+            }
+        } else {
+            previous = current.isEmpty ? TextRules.lastCompleteWord(in: before) : TextRules.previousWord(in: before)
+            // Con el cursor dentro de la palabra («hol|a») se reemplaza entera.
+            shiftCursor(tail.utf16.count)
+            deleteBack(current.count + tail.count)
+        }
+        // Si ya sigue un espacio, no se añade otro.
+        let spaced = after.dropFirst(tail.count).first?.isWhitespace != true
+        put(spaced ? title + " " : title)
+        autoSpaceInserted = spaced
         if learningActive, TextRules.isPlainWord(title) {
             WordLearner.learn(title)
             if !previous.isEmpty { WordLearner.learnBigram(previous: previous, next: title) }
@@ -2026,6 +2080,9 @@ final class KeyboardViewController: UIInputViewController {
     /// Mira el portapapeles sin leerlo. Si cambió lo copiado, el chip lo
     /// ofrece y queda pendiente de guardarse.
     private func lookAtPasteboard() {
+        // Mismo contador, mismo contenido: no hace falta pedir tipos ni elementos
+        // (se llama tras cada espacio, en el hilo principal).
+        guard UIPasteboard.general.changeCount != lastSighting?.count else { return }
         let peek = PasteboardWatch.peek()
         let sighting = PasteboardSighting(count: peek.count, signature: peek.signature)
         let previous = lastSighting
@@ -2178,9 +2235,10 @@ final class KeyboardViewController: UIInputViewController {
 
     private func startCaptureTimer() {
         stopCaptureTimer()
-        guard hasFullAccess else { return }
-        let timer = Timer(timeInterval: 2, target: self, selector: #selector(captureTimerTick),
-                          userInfo: nil, repeats: true)
+        // Cerrado antes de que llegue el arranque diferido: sin temporizador.
+        guard hasFullAccess, view.window != nil else { return }
+        // Con bloque y `weak`: un Timer con `target` retiene el controlador.
+        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.captureIfCopied() }
         RunLoop.main.add(timer, forMode: .common)
         captureTimer = timer
         captureIfCopied()
@@ -2190,8 +2248,6 @@ final class KeyboardViewController: UIInputViewController {
         captureTimer?.invalidate()
         captureTimer = nil
     }
-
-    @objc private func captureTimerTick() { captureIfCopied() }
 
     private func captureIfCopied() {
         // Sólo con el teclado en pantalla: leer el portapapeles puede hacer que
@@ -2479,7 +2535,11 @@ final class KeyboardViewController: UIInputViewController {
 
     private func pickClip(_ snap: ClipSnapshot) {
         keyFeedback()
-        if let text = snap.insertable {
+        if snap.isText {
+            guard let text = fetchInsertableText(snap.id) else {
+                showHint("No se encontró en el historial")
+                return
+            }
             put(text)
             pendingRevert = nil
             justSwiped = nil
@@ -2550,7 +2610,8 @@ final class KeyboardViewController: UIInputViewController {
         guard hasFullAccess else { return }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let container = ClipStore.makeContainer()
-            DispatchQueue.main.async { self?.clipContainer = container }
+            // Si el panel ya abrió uno en el hilo principal, se queda ese.
+            DispatchQueue.main.async { if self?.clipContainer == nil { self?.clipContainer = container } }
         }
     }
 
@@ -2605,7 +2666,7 @@ final class KeyboardViewController: UIInputViewController {
                 searchTextCache[item.id] = (item.updatedAt, item.isSensitive, searchText)
             }
             return ClipSnapshot(id: item.id, typeLabel: item.type.label, systemImage: item.type.systemImage,
-                                preview: item.displayTitle, insertable: insertableText(for: item),
+                                preview: item.displayTitle, isText: insertableText(for: item) != nil,
                                 searchText: searchText,
                                 isImage: isImage, thumbnail: thumbnails[item.id],
                                 isSensitive: item.isSensitive, isFavorite: item.isFavorite)
@@ -2666,6 +2727,13 @@ final class KeyboardViewController: UIInputViewController {
         return TextRules.fold(parts.joined(separator: " "))
     }
 
+    private func fetchInsertableText(_ id: UUID) -> String? {
+        guard let container = clipContainer else { return nil }
+        var descriptor = FetchDescriptor<ClipItem>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return (try? ModelContext(container).fetch(descriptor).first).flatMap { insertableText(for: $0) }
+    }
+
     private func insertableText(for item: ClipItem) -> String? {
         switch item.type {
         case .link:  return item.urlString ?? item.plainText
@@ -2681,6 +2749,11 @@ final class KeyboardViewController: UIInputViewController {
             allSnapshots = []
             thumbnails = [:]
             searchTextCache = [:]
+        }
+        // El panel de emojis oculto se vuelve a crear al abrirlo.
+        if mode != .emoji, searchTarget == nil {
+            emojiPanel?.removeFromSuperview()
+            emojiPanel = nil
         }
     }
 
@@ -2987,6 +3060,10 @@ final class KeyView: UIView {
         backgroundColor = baseColor(pressed: false)
         updateLayerColors()
 
+        // VoiceOver: la tecla es el elemento (las de icono no tienen texto).
+        isAccessibilityElement = true
+        accessibilityTraits = .keyboardKey
+
         // El globo pasa todos sus toques al sistema: un toque cambia de
         // teclado y una pulsación larga muestra la lista, como en iOS.
         if spec.kind == .globe {
@@ -3036,6 +3113,20 @@ final class KeyView: UIView {
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
         updateLayerColors()
+    }
+
+    override var accessibilityLabel: String? {
+        get {
+            switch spec.kind {
+            case .shift:     return "Mayúsculas"
+            case .backspace: return "Borrar"
+            case .globe:     return "Siguiente teclado"
+            case .space:     return "Espacio"
+            case .ret:       return spec.value.isEmpty ? "Retorno" : spec.value
+            default:         return label.text
+            }
+        }
+        set {}
     }
 
     @objc private func globeDown() {
@@ -3404,7 +3495,9 @@ struct ClipSnapshot: Identifiable {
     let typeLabel: String
     let systemImage: String
     let preview: String
-    let insertable: String?
+    /// Se escribe como texto (si no, es imagen o archivo). El texto no se
+    /// guarda aquí: 60 textos largos no caben en la memoria del teclado.
+    let isText: Bool
     /// Texto para buscar, ya sin tildes ni mayúsculas.
     let searchText: String
     let isImage: Bool
@@ -3780,6 +3873,8 @@ final class IconTouchButton: UIView {
         layer.cornerRadius = 8
         isMultipleTouchEnabled = true
         isExclusiveTouch = false
+        isAccessibilityElement = true
+        accessibilityTraits = .button
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -3788,10 +3883,19 @@ final class IconTouchButton: UIView {
         imageView.frame = bounds
     }
 
+    override func accessibilityActivate() -> Bool { fire(); return true }
+
+    /// Nombre para VoiceOver según el icono que se muestra.
+    private static let symbolLabels = [
+        "doc.on.clipboard": "Portapapeles", "face.smiling": "Emojis", "keyboard": "Teclado",
+        "chevron.backward": "Atrás", "xmark.circle.fill": "Borrar búsqueda",
+    ]
+
     func setSymbol(_ name: String, active: Bool = false) {
         imageView.image = UIImage(systemName: name,
                                   withConfiguration: UIImage.SymbolConfiguration(pointSize: 19,
                                                                                  weight: .medium))
+        accessibilityLabel = Self.symbolLabels[name] ?? accessibilityLabel
         let theme = KeyStyle.theme
         imageView.tintColor = active ? theme.accent : theme.text
         backgroundColor = active ? theme.accent.withAlphaComponent(0.22) : .clear
