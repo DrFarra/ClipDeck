@@ -376,6 +376,7 @@ final class KeyboardViewController: UIInputViewController {
     @objc private func hostWillEnterForeground() {
         captureIfCopied()
         loadSupplementaryLexicon()
+        resyncHeight()
         guard reloadConfig() else { return }
         applyInputTraits()
         if mode == .keys { showKeyboard() }
@@ -383,6 +384,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        resyncHeight()
         releaseEdgeTouches()
         // Lo que no hace falta para teclear, después de que el teclado se vea:
         // si la apertura tarda demasiado, la app anfitriona lo cierra.
@@ -495,6 +497,24 @@ final class KeyboardViewController: UIInputViewController {
     private func updateHeight() {
         let h = desiredHeight()
         if let c = heightConstraint, c.constant != h { c.constant = h }
+    }
+
+    /// A veces iOS deja su contenedor con la altura del teclado anterior (el
+    /// de Apple, más alto): asoma una franja de su fondo por encima del
+    /// nuestro, como si hubiera otro teclado debajo, y sólo se iba al cerrar
+    /// y abrir. Como nuestra altura no cambia, el sistema no vuelve a medir;
+    /// moverla medio punto un instante le obliga a hacerlo.
+    private func resyncHeight() {
+        guard let c = heightConstraint else { return }
+        c.constant = desiredHeight() + 0.5
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let c = self.heightConstraint else { return }
+            c.constant = self.desiredHeight()
+            self.view.setNeedsLayout()
+            self.view.layoutIfNeeded()
+        }
     }
 
     // MARK: Campo de texto de la app
