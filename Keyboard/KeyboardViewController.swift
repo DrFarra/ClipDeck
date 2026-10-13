@@ -430,6 +430,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        rememberEntries(whole: true)
         stopCaptureTimer()
         if searching { endSearch(then: .keys) }
         // Guardar lo aprendido antes de que el sistema descargue el teclado.
@@ -497,6 +498,13 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     // MARK: Campo de texto de la app
+
+    override func textWillChange(_ textInput: UITextInput?) {
+        super.textWillChange(textInput)
+        // La app va a cambiar el texto (enviar, cambiar de campo…): lo que
+        // hubiera escrito aún se puede leer.
+        rememberEntries(whole: false)
+    }
 
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
@@ -581,6 +589,75 @@ final class KeyboardViewController: UIInputViewController {
 
     private var learningActive: Bool {
         config.learnWords && !fieldIsLiteral && textDocumentProxy.autocorrectionType != .no
+    }
+
+    // MARK: Correos y números habituales (EntryMemory)
+
+    /// El campo pide un correo o un teléfono; nil si es texto normal.
+    private var entryField: EntryMemory.Kind? {
+        if let t = contentType {
+            if t == .emailAddress { return .email }
+            if t == .telephoneNumber { return .number }
+        }
+        switch textDocumentProxy.keyboardType ?? .default {
+        case .emailAddress: return .email
+        case .phonePad, .numberPad, .asciiCapableNumberPad: return .number
+        default: return nil
+        }
+    }
+
+    /// Nunca se recuerda nada de contraseñas, códigos de un solo uso ni tarjetas.
+    private var entryLearningActive: Bool {
+        let sensitive: [UITextContentType] = [.password, .newPassword, .oneTimeCode, .creditCardNumber]
+        guard config.learnWords, !searching else { return false }
+        if let t = contentType, sensitive.contains(t) { return false }
+        return true
+    }
+
+    /// Lo ya contado en este campo: cada correo o número suma un uso por campo.
+    private var rememberedEntries = Set<String>()
+    private var rememberedEpoch = -1
+    /// La barra está proponiendo correos o números (no palabras).
+    private var entryToken: String?
+
+    /// Lo escrito desde el último espacio: la «@» y el punto no parten un correo.
+    private func entryTokenBeforeCursor() -> String {
+        var token = ""
+        for c in (textDocumentProxy.documentContextBeforeInput ?? "").reversed() {
+            if c.isWhitespace { break }
+            token.insert(c, at: token.startIndex)
+        }
+        return token
+    }
+
+    private func syncRememberedEpoch() {
+        if rememberedEpoch != documentEpoch { rememberedEpoch = documentEpoch; rememberedEntries = [] }
+    }
+
+    /// Anota los correos y números del campo. Con `whole == false` se salta el
+    /// fragmento junto al cursor: puede estar a medio escribir («ana@gmail.co»).
+    private func rememberEntries(whole: Bool) {
+        guard entryLearningActive else { return }
+        syncRememberedEpoch()
+        var before = textDocumentProxy.documentContextBeforeInput ?? ""
+        var after = textDocumentProxy.documentContextAfterInput ?? ""
+        if !whole {
+            while let c = before.last, !c.isWhitespace { before.removeLast() }
+            while let c = after.first, !c.isWhitespace { after.removeFirst() }
+        }
+        let found = EntryMemory.extract(before + " " + after).filter {
+            rememberedEntries.insert(EntryMemory.key($0.text, $0.kind)).inserted
+        }
+        guard !found.isEmpty else { return }
+        Self.textQueue.async { EntryMemory.remember(found) }
+    }
+
+    /// Correos o números que proponer ahora mismo, y el fragmento que sustituyen.
+    private func entrySuggestions() -> (token: String, words: [String])? {
+        guard config.learnWords else { return nil }
+        let token = entryTokenBeforeCursor()
+        let words = EntryMemory.suggestions(for: token, field: entryField, in: EntryMemory.all())
+        return words.isEmpty ? nil : (token, words)
     }
 
     private static func numPad(for type: UIKeyboardType?) -> NumPad? {
@@ -1687,6 +1764,7 @@ final class KeyboardViewController: UIInputViewController {
             endSearch(then: target == .clips ? .clipboard : .keys)
             return
         }
+        rememberEntries(whole: true)
         commit("\n")
     }
 
@@ -2001,6 +2079,12 @@ final class KeyboardViewController: UIInputViewController {
     /// que el corrector no bloquee nunca la siguiente pulsación de tecla.
     private func scheduleSuggestions() {
         guard !searching else { return }
+        if mode == .keys, let entries = entrySuggestions() {
+            suggestionWork?.cancel()
+            setSuggestions(entries.words)
+            entryToken = entries.token
+            return
+        }
         guard config.prediction, numPad == nil else { setSuggestions([]); return }
         suggestionWork?.cancel()
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
@@ -2126,6 +2210,7 @@ final class KeyboardViewController: UIInputViewController {
     private func setSuggestions(_ words: [String], nextWords: Bool = false,
                                 correction: (word: String, fix: String?)? = nil) {
         guard !searching else { return }
+        entryToken = nil
         suggestionsAreNextWords = nextWords
         plannedCorrection = correction
         var titles = words
@@ -2164,6 +2249,23 @@ final class KeyboardViewController: UIInputViewController {
         wordTouches.removeAll(keepingCapacity: true)
         if title.hasPrefix("↺ ") {
             undoAutocorrect(fromBackspace: false)
+            return
+        }
+        if entryToken != nil {
+            deleteBack(entryTokenBeforeCursor().count)
+            // En un campo de correo o teléfono no hace falta espacio detrás.
+            put(entryField == nil ? title + " " : title)
+            autoSpaceInserted = entryField == nil
+            if let kind = EntryMemory.extract(title).first?.kind {
+                syncRememberedEpoch()
+                if rememberedEntries.insert(EntryMemory.key(title, kind)).inserted {
+                    Self.textQueue.async { EntryMemory.remember([(title, kind)]) }
+                }
+            }
+            pendingRevert = nil
+            justSwiped = nil
+            updateShiftFromContext()
+            scheduleSuggestions()
             return
         }
         if let planned = plannedCorrection, planned.fix != nil, title == Self.keepTitle(planned.word) {
@@ -2506,7 +2608,7 @@ final class KeyboardViewController: UIInputViewController {
 
     @objc private func confirmForgetAction() {
         if let w = confirmWord {
-            WordLearner.forget(w)
+            if !EntryMemory.forget(w) { WordLearner.forget(w) }
             showHint("«\(w)» ya no se sugerirá")
         }
         dismissConfirm()

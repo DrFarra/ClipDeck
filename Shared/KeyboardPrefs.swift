@@ -357,6 +357,7 @@ enum WordLearner {
         KbPrefs.store.removeObject(forKey: wordsKey)
         KbPrefs.store.removeObject(forKey: bigramsKey)
         KbPrefs.store.removeObject(forKey: protectedKey)
+        EntryMemory.clear()      // los correos y números habituales también
     }
 
     // MARK: Gestión manual (pantalla de palabras aprendidas)
