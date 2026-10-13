@@ -182,6 +182,11 @@ final class KeyboardViewController: UIInputViewController {
     private var swipeStartChar = ""
     private var swipeToken = 0
     private var swipeKeySize: CGSize = .zero
+    /// Lo que suele seguir a la palabra anterior al trazo, y las candidatas en
+    /// vivo mientras se dibuja (una cada vez, como mucho cada 0,12 s).
+    private var swipeContext: ContextModel.Context?
+    private var swipePreviewAt: CFTimeInterval = 0
+    private var swipePreviewBusy = false
     private var lastAreaSize: CGSize = .zero
 
     // Modelo de toque: dónde cae el dedo en cada tecla.
@@ -1518,6 +1523,9 @@ final class KeyboardViewController: UIInputViewController {
         selectionFeedback()
         rebuildSwipeGeometry()
         swipePoints = [point]
+        // previousWord: vale tanto si iOS ya refleja el borrado de la letra de arranque como si no.
+        swipeContext = WordLearner.context(after: TextRules.previousWord(in: textDocumentProxy.documentContextBeforeInput ?? ""))
+        swipePreviewAt = CACurrentMediaTime()
 
         let trail: SwipeTrailView
         if let existing = swipeTrail {
@@ -1538,6 +1546,28 @@ final class KeyboardViewController: UIInputViewController {
         if let last = swipePoints.last, hypot(point.x - last.x, point.y - last.y) < 2 { return }
         swipePoints.append(point)
         swipeTrail?.add(point)
+        previewSwipe()
+    }
+
+    /// Candidatas en la barra mientras el dedo aún dibuja, para ver si va bien.
+    private func previewSwipe() {
+        let now = CACurrentMediaTime()
+        guard !swipePreviewBusy, now - swipePreviewAt > 0.12, swipePoints.count > 6 else { return }
+        swipePreviewAt = now
+        swipePreviewBusy = true
+        let points = swipePoints, centers = swipeCenters, pitch = swipePitch
+        let token = swipeToken, context = swipeContext
+        let capitalize = swipeStartChar.first?.isUppercase == true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let words = SwipeRecognizer.recognize(points: points, keyCenters: centers, pitch: pitch,
+                                                  limit: 3, context: context)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.swipePreviewBusy = false
+                guard self.swipeActive, self.swipeToken == token, !words.isEmpty else { return }
+                self.setSuggestions(words.map { capitalize ? $0.prefix(1).uppercased() + $0.dropFirst() : $0 })
+            }
+        }
     }
 
     func endSwipe(cancelled: Bool) {
@@ -1560,8 +1590,10 @@ final class KeyboardViewController: UIInputViewController {
         let token = swipeToken
         let centers = swipeCenters
         let pitch = swipePitch
+        let context = swipeContext
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let words = SwipeRecognizer.recognize(points: points, keyCenters: centers, pitch: pitch)
+            let words = SwipeRecognizer.recognize(points: points, keyCenters: centers, pitch: pitch,
+                                                  context: context)
             DispatchQueue.main.async {
                 guard let self, self.swipeToken == token else { return }
                 self.applySwipe(words, startChar: startChar)
@@ -1828,7 +1860,8 @@ final class KeyboardViewController: UIInputViewController {
         let primary = dominantLanguage(words.suffix(12))
         return SmartCorrector.correction(input, lexicon: lex,
                                          spelling: { spelling(of: $0, primary: primary) },
-                                         guesses: { guesses(for: $0, primary: primary) })
+                                         guesses: { guesses(for: $0, primary: primary) },
+                                         successors: { WordLearner.context(after: $0).likely(5) })
     }
 
     /// Sugerencias del corrector del sistema, primero las del idioma del texto.
@@ -1974,6 +2007,7 @@ final class KeyboardViewController: UIInputViewController {
         let lex = lexicon
         let shortcuts = correctionActive ? replacements : [:]
         let capNext = shift != .off
+        let touches = wordTouches, centers = swipeCenters, keySize = swipeKeySize
         let word = TextRules.wordBefore(before)
         // Con el cursor en medio de una palabra no hay nada que adelantar.
         let insideWord = textDocumentProxy.documentContextAfterInput?.first?.isLetter == true
@@ -1982,7 +2016,9 @@ final class KeyboardViewController: UIInputViewController {
         let work = DispatchWorkItem {
             let result = KeyboardViewController.computeSuggestions(before: before, lexicon: lex,
                                                                   replacements: shortcuts,
-                                                                  capitalizeNext: capNext)
+                                                                  capitalizeNext: capNext,
+                                                                  touches: touches, keyCenters: centers,
+                                                                  keySize: keySize)
             let planned = job.map { (word: $0.input.word, fix: KeyboardViewController.runCorrection($0)) }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.mode == .keys, !self.searching else { return }
@@ -2000,7 +2036,9 @@ final class KeyboardViewController: UIInputViewController {
     /// que son la palabra siguiente, no completados de la que se escribe.
     private static func computeSuggestions(before: String, lexicon: [String],
                                            replacements: [String: String],
-                                           capitalizeNext: Bool) -> (words: [String], next: Bool) {
+                                           capitalizeNext: Bool,
+                                           touches: [CGPoint] = [], keyCenters: [UInt8: CGPoint] = [:],
+                                           keySize: CGSize = .zero) -> (words: [String], next: Bool) {
         let word = TextRules.wordBefore(before)
         if word.isEmpty || word.rangeOfCharacter(from: .letters) == nil {
             return (nextWords(lastWord: TextRules.lastCompleteWord(in: before), capitalizeNext: capitalizeNext), true)
@@ -2012,6 +2050,16 @@ final class KeyboardViewController: UIInputViewController {
         // La sustitución de texto del usuario va primero y tal cual.
         let pinned = replacements[lower].map { [$0] } ?? []
         var results: [String] = []
+
+        // Primero las del vocabulario por probabilidad en contexto, tolerando
+        // el dedo en la tecla vecina; luego, de reserva, lo de siempre.
+        if let snapshot = SwipeLexicon.shared.snapshot {
+            let head = String(before.dropLast(word.count))
+            results += ContextModel.completions(for: word, touches: touches, keyCenters: keyCenters,
+                                                keySize: keySize,
+                                                context: WordLearner.context(after: TextRules.lastCompleteWord(in: head)),
+                                                lexicon: snapshot)
+        }
 
         if word.count < 2 {
             // Con una sola letra: lo que suele seguir a la palabra anterior y
@@ -2055,15 +2103,14 @@ final class KeyboardViewController: UIInputViewController {
         return (unique, false)
     }
 
+    /// La siguiente palabra más probable detrás de `lastWord` (vacía = inicio
+    /// de frase): lo aprendido, las frases de partida y la frecuencia.
     private static func nextWords(lastWord: String, capitalizeNext: Bool) -> [String] {
-        var r: [String] = []
-        if !lastWord.isEmpty { r += WordLearner.successors(of: lastWord) }
-        let blocked = WordLearner.blockedWords()
-        for w in KbData.commonWords {
-            if r.count >= 3 { break }
-            if !r.contains(w) && !blocked.contains(w) { r.append(w) }
-        }
-        return Array(r.prefix(3)).map { capitalizeNext ? $0.prefix(1).uppercased() + $0.dropFirst() : $0 }
+        let r = ContextModel.nextWords(WordLearner.context(after: lastWord),
+                                       lexicon: SwipeLexicon.shared.snapshot,
+                                       common: KbData.commonWords,
+                                       blocked: WordLearner.blockedWords())
+        return r.map { capitalizeNext ? $0.prefix(1).uppercased() + $0.dropFirst() : $0 }
     }
 
     /// La barra muestra la palabra siguiente: tocarla no reemplaza nada.
