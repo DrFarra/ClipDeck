@@ -24,6 +24,18 @@ extension UIInputView: UIInputViewAudioFeedback {
 final class FeedbackHostView: UIView {
     private var backdropView: UIView?
 
+    /// Cuánto sube el fondo por encima de la vista para tapar el margen que
+    /// deja el sistema (ver `systemTopGap`). Sólo se pinta: no recibe toques.
+    var topOverscan: CGFloat = 0 {
+        didSet { if topOverscan != oldValue { setNeedsLayout() } }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        backdropView?.frame = CGRect(x: 0, y: -topOverscan, width: bounds.width,
+                                     height: bounds.height + topOverscan)
+    }
+
     func applyBackdrop(_ backdrop: KeyboardTheme.Backdrop) {
         backdropView?.removeFromSuperview()
         backdropView = nil
@@ -39,8 +51,7 @@ final class FeedbackHostView: UIView {
         case .gradient(let top, let bottom):
             view = GradientBackdropView(top: top, bottom: bottom)
         }
-        view.frame = bounds
-        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.frame = CGRect(x: 0, y: -topOverscan, width: bounds.width, height: bounds.height + topOverscan)
         view.isUserInteractionEnabled = false
         insertSubview(view, at: 0)
         backdropView = view
@@ -233,7 +244,10 @@ final class KeyboardViewController: UIInputViewController {
         // El fondo lo pone el tema (ver `FeedbackHostView`).
         view.backgroundColor = .clear
         inputView?.allowsSelfSizing = true
+        // El fondo puede asomar por encima de la vista (ver `systemTopGap`).
+        view.clipsToBounds = false
         root = FeedbackHostView(frame: view.bounds)
+        root.clipsToBounds = false
         root.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(root)
         NSLayoutConstraint.activate([
@@ -376,7 +390,6 @@ final class KeyboardViewController: UIInputViewController {
     @objc private func hostWillEnterForeground() {
         captureIfCopied()
         loadSupplementaryLexicon()
-        resyncHeight()
         guard reloadConfig() else { return }
         applyInputTraits()
         if mode == .keys { showKeyboard() }
@@ -384,7 +397,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        resyncHeight()
+        root.topOverscan = systemTopGap()
         releaseEdgeTouches()
         // Lo que no hace falta para teclear, después de que el teclado se vea:
         // si la apertura tarda demasiado, la app anfitriona lo cierra.
@@ -469,6 +482,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        root.topOverscan = systemTopGap()
         layoutAll()
         releaseEdgeTouches()
     }
@@ -499,22 +513,21 @@ final class KeyboardViewController: UIInputViewController {
         if let c = heightConstraint, c.constant != h { c.constant = h }
     }
 
-    /// A veces iOS deja su contenedor con la altura del teclado anterior (el
-    /// de Apple, más alto): asoma una franja de su fondo por encima del
-    /// nuestro, como si hubiera otro teclado debajo, y sólo se iba al cerrar
-    /// y abrir. Como nuestra altura no cambia, el sistema no vuelve a medir;
-    /// moverla medio punto un instante le obliga a hacerlo.
-    private func resyncHeight() {
-        guard let c = heightConstraint else { return }
-        c.constant = desiredHeight() + 0.5
-        view.setNeedsLayout()
-        view.layoutIfNeeded()
-        DispatchQueue.main.async { [weak self] in
-            guard let self, let c = self.heightConstraint else { return }
-            c.constant = self.desiredHeight()
-            self.view.setNeedsLayout()
-            self.view.layoutIfNeeded()
+    /// En apps con la barra de escribir pegada al teclado (WhatsApp), iOS 26
+    /// deja un margen entre el borde de su cristal y nuestra vista: se veía una
+    /// franja de otro color, como si hubiera otro teclado debajo. Es el hueco
+    /// que hay que cubrir con nuestro fondo. Sólo cuenta uno pequeño dentro de
+    /// una vista del mismo ancho: nunca la barra de la app.
+    private func systemTopGap() -> CGFloat {
+        var offset: CGFloat = 0
+        var current: UIView = view
+        for _ in 0..<3 {
+            guard let parent = current.superview, abs(parent.bounds.width - view.bounds.width) < 1 else { break }
+            offset += current.frame.minY
+            if offset > 0.5 { return offset <= 40 ? offset : 0 }
+            current = parent
         }
+        return 0
     }
 
     // MARK: Campo de texto de la app
