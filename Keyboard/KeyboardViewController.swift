@@ -1535,6 +1535,9 @@ final class KeyboardViewController: UIInputViewController {
 
     func swipeMove(to point: CGPoint) {
         guard swipeActive else { return }
+        // Salir del teclado por arriba no es una palabra: es el gesto de
+        // inicio o de multitarea de iOS que empezó sobre una tecla.
+        if point.y < 0 { endSwipe(cancelled: true); return }
         if let last = swipePoints.last, hypot(point.x - last.x, point.y - last.y) < 2 { return }
         swipePoints.append(point)
         swipeTrail?.add(point)
@@ -1550,8 +1553,11 @@ final class KeyboardViewController: UIInputViewController {
         let startChar = swipeStartChar
         swipeStartChar = ""
 
+        // Cancelado (el sistema se quedó el toque) o fuera del teclado: no se
+        // escribe nada, ni siquiera la letra donde empezó.
+        if cancelled { scheduleSuggestions(); return }
         let long = SwipeRecognizer.traceLength(points) > swipePitch * 1.6
-        guard !cancelled, points.count > 3, long else {
+        guard points.count > 3, long else {
             restoreSwipeStart(startChar)
             return
         }
@@ -2089,9 +2095,13 @@ final class KeyboardViewController: UIInputViewController {
         } else if mode == .keys, let correction, let fix = correction.fix {
             // Como iOS: lo tecleado entre comillas para dejarlo así, y en el
             // centro, resaltado, lo que pondrá el espacio.
-            let others = words.filter { $0.lowercased() != fix.lowercased() }
+            // La corrección reemplaza la palabra. Si las demás eran «palabra
+            // siguiente», se quitan: con ellas la barra entera se trataba como
+            // tal y tocar la corrección la ponía detrás de la errata.
+            let others = nextWords ? [] : words.filter { $0.lowercased() != fix.lowercased() }
             titles = [Self.keepTitle(correction.word), fix] + others.prefix(1)
             emphasized = 1
+            suggestionsAreNextWords = false
         } else if mode == .keys, currentWord().isEmpty, let kind = recentPasteKind() {
             // Lo recién copiado ocupa la barra entera: nada de predicciones al lado.
             paste = kind
@@ -3452,7 +3462,9 @@ final class KeyView: UIView {
         if spec.kind == .space, let controller, controller.trackpadEnabled {
             let x = t.location(in: superview).x
             let dx = x - spaceStartX
-            if !spaceTracking && abs(dx) > 16 {
+            // Al escribir rápido el pulgar resbala en el espacio al soltarlo:
+            // sin la espera, eso movía el cursor dentro de la palabra.
+            if !spaceTracking && abs(dx) > 16 && CACurrentMediaTime() - pressStart > 0.2 {
                 spaceTracking = true
                 trackpadTimer?.invalidate(); trackpadTimer = nil
             }
