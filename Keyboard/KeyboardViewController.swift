@@ -205,7 +205,7 @@ final class KeyboardViewController: UIInputViewController {
     private let emojiButton = IconTouchButton()
     private var suggestionButtons: [SuggestionButton] = []
     private var confirmOverlay: UIView?
-    private var confirmWord: String?
+    private var confirmAction: (() -> Void)?
     private var separatorViews: [UIView] = []
     private let keyboardArea = KeyAreaView()
     private var keyViews: [KeyRowView] = []
@@ -2174,7 +2174,11 @@ final class KeyboardViewController: UIInputViewController {
         if word.hasPrefix("↺ ") { word = String(word.dropFirst(2)) }
         guard !word.isEmpty else { return }
         keyFeedback()
-        showForgetConfirm(word: word)
+        showConfirm("¿Olvidar «\(word)»?\nNo se volverá a sugerir.", button: "Olvidar") { [weak self] in
+            WordLearner.forget(word)
+            self?.showHint("«\(word)» ya no se sugerirá")
+            self?.scheduleSuggestions()
+        }
     }
 
     // MARK: Pegar lo recién copiado
@@ -2416,9 +2420,9 @@ final class KeyboardViewController: UIInputViewController {
     // MARK: Confirmación para olvidar una sugerencia (sin UIAlertController, no
     // disponible en teclados: se dibuja dentro del propio teclado).
 
-    private func showForgetConfirm(word: String) {
+    private func showConfirm(_ message: String, button: String, action: @escaping () -> Void) {
         dismissConfirm()
-        confirmWord = word
+        confirmAction = action
 
         let dim = UIView(frame: root.bounds)
         dim.backgroundColor = UIColor.black.withAlphaComponent(0.35)
@@ -2439,7 +2443,7 @@ final class KeyboardViewController: UIInputViewController {
         label.numberOfLines = 2
         label.textAlignment = .center
         label.font = .systemFont(ofSize: 15)
-        label.text = "¿Olvidar «\(word)»?\nNo se volverá a sugerir."
+        label.text = message
         label.textColor = KeyStyle.theme.text
         card.addSubview(label)
 
@@ -2451,11 +2455,11 @@ final class KeyboardViewController: UIInputViewController {
         card.addSubview(cancel)
 
         let confirm = UIButton(type: .system)
-        confirm.setTitle("Olvidar", for: .normal)
+        confirm.setTitle(button, for: .normal)
         confirm.setTitleColor(.systemRed, for: .normal)
         confirm.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
         confirm.frame = CGRect(x: cardW / 2 + 5, y: cardH - 46, width: cardW / 2 - 15, height: 38)
-        confirm.addTarget(self, action: #selector(confirmForgetAction), for: .touchUpInside)
+        confirm.addTarget(self, action: #selector(confirmTapped), for: .touchUpInside)
         card.addSubview(confirm)
 
         confirmOverlay = dim
@@ -2464,16 +2468,13 @@ final class KeyboardViewController: UIInputViewController {
     @objc private func dismissConfirm() {
         confirmOverlay?.removeFromSuperview()
         confirmOverlay = nil
-        confirmWord = nil
+        confirmAction = nil
     }
 
-    @objc private func confirmForgetAction() {
-        if let w = confirmWord {
-            WordLearner.forget(w)
-            showHint("«\(w)» ya no se sugerirá")
-        }
+    @objc private func confirmTapped() {
+        let action = confirmAction
         dismissConfirm()
-        scheduleSuggestions()
+        action?()
     }
 
     private static func autocorrection(for word: String) -> String? {
@@ -2681,7 +2682,34 @@ final class KeyboardViewController: UIInputViewController {
                                   self.snapshotsAt = Date()
                                   self.refreshMode()
                               },
-                              onPick: { [weak self] snap in self?.pickClip(snap) })
+                              onPick: { [weak self] snap in self?.pickClip(snap) },
+                              onDelete: { [weak self] snap in
+                                  guard let self else { return }
+                                  self.longPressFeedback()
+                                  self.showConfirm("¿Eliminar del historial?\nNo se puede deshacer.",
+                                                   button: "Eliminar") { [weak self] in self?.deleteClip(snap.id) }
+                              })
+    }
+
+    /// Lo mismo que «Eliminar» en la app, sin tener que abrirla.
+    private func deleteClip(_ id: UUID) {
+        guard let container = clipContainer else { return }
+        let context = ModelContext(container)
+        guard let item = CaptureService.findByID(id, context: context) else {
+            showHint("No se encontró en el historial")
+            return
+        }
+        context.delete(item)
+        guard (try? context.save()) != nil else {
+            showHint("No se pudo eliminar")
+            return
+        }
+        CaptureService.updateWidget(context: context)
+        allSnapshots.removeAll { $0.id == id }
+        thumbnails[id] = nil
+        searchTextCache[id] = nil
+        snapshotsAt = Date()
+        refreshMode()
     }
 
     private func pickClip(_ snap: ClipSnapshot) {
@@ -3676,6 +3704,7 @@ struct ClipboardPanel: View {
     let onSearch: () -> Void
     let onClearQuery: () -> Void
     let onPick: (ClipSnapshot) -> Void
+    let onDelete: (ClipSnapshot) -> Void
 
     var body: some View {
         Group {
@@ -3712,6 +3741,8 @@ struct ClipboardPanel: View {
                                     card(snap)
                                         .contentShape(Rectangle())
                                         .onTapGesture { onPick(snap) }
+                                        .onLongPressGesture { onDelete(snap) }
+                                        .accessibilityAction(named: "Eliminar") { onDelete(snap) }
                                 }
                             }
                             .padding([.horizontal, .bottom], 6)
