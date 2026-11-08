@@ -40,7 +40,11 @@ struct LearnedWordsView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { EditButton() }
         }
-        .onAppear(perform: reload)
+        .onAppear {
+            // Lo que aprendió el teclado (otro proceso) está en disco, no en la caché de la app.
+            WordLearner.invalidateCache()
+            reload()
+        }
         .sheet(item: $editing) { entry in
             editSheet(entry)
         }
@@ -182,7 +186,7 @@ struct LearnedWordsView: View {
             newWord = ""
             reload()
         } else {
-            flash("Palabra no válida (2–24 letras, sin espacios)")
+            flash("Palabra no válida (2–\(WordLearner.maxManualLength) caracteres, sin espacios)")
         }
     }
 

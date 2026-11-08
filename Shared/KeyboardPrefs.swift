@@ -346,11 +346,14 @@ enum WordLearner {
             .map { (word: $0.key, count: $0.value) }
     }
 
+    /// Lo añadido a mano puede ser un correo o un usuario, más largo que una palabra.
+    static let maxManualLength = 64
+
     /// Añade o actualiza una palabra manualmente (y la desbloquea).
     @discardableResult
     static func addManual(_ word: String, count: Int = 5) -> Bool {
         let clean = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard clean.count >= 2, clean.count <= 24,
+        guard clean.count >= 2, clean.count <= maxManualLength,
               clean.rangeOfCharacter(from: .letters) != nil,
               !clean.contains(" ") else { return false }
         lock.lock()
@@ -372,7 +375,7 @@ enum WordLearner {
     static func rename(_ old: String, to new: String) -> Bool {
         let from = old.lowercased()
         let to = new.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard to.count >= 2, to.count <= 24, to != from,
+        guard to.count >= 2, to.count <= maxManualLength, to != from,
               to.rangeOfCharacter(from: .letters) != nil, !to.contains(" ") else { return false }
         lock.lock()
         var dict = wordsDict()

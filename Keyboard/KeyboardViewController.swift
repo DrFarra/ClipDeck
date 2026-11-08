@@ -339,7 +339,15 @@ final class KeyboardViewController: UIInputViewController {
         noteOwnEdit()
         haptic.prepare()
         if mode == .keys { showKeyboard() }
+        reloadLearnedWords()
         loadSupplementaryLexicon()
+    }
+
+    /// Lo añadido en la app (p. ej. tu correo) vive en disco; sin releerlo, el
+    /// teclado seguía con su copia vieja y al guardar la suya lo borraba.
+    private func reloadLearnedWords() {
+        WordLearner.flush()
+        WordLearner.invalidateCache()
     }
 
     /// Recarga las preferencias por si cambiaron en la app y, si cambiaron,
@@ -370,6 +378,7 @@ final class KeyboardViewController: UIInputViewController {
 
     @objc private func hostWillEnterForeground() {
         captureIfCopied()
+        reloadLearnedWords()
         loadSupplementaryLexicon()
         guard reloadConfig() else { return }
         applyInputTraits()
