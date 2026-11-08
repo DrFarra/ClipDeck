@@ -79,3 +79,7 @@ Las listas de frecuencia del autocorrector (`Keyboard/frecuencias-es.txt` y
 de Hermit Dave (subtítulos de OpenSubtitles 2018, licencia
 [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)), filtradas con los
 diccionarios de Hunspell para quitar nombres propios y erratas.
+
+Las frases de partida del modelo de contexto (`Keyboard/frases-es.txt` y
+`Keyboard/frases-en.txt`) son propias: dan los primeros pares de palabras para
+proponer la siguiente antes de que el teclado aprenda los del usuario.

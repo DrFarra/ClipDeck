@@ -14,16 +14,23 @@ import UIKit
 //      los centros de sus teclas), se re-muestrea igual y se mide la distancia
 //      media punto a punto con el trazo real.
 //   5. Se ordena por esa distancia, con bonificación para las palabras que el
-//      usuario ya escribió y las de uso frecuente.
+//      usuario ya escribió, las de uso frecuente y las que suelen ir detrás de
+//      la palabra anterior (`ContextModel`): entre «cómo» y «como» decide el
+//      contexto, no sólo la forma.
 
 enum SwipeRecognizer {
 
     static let sampleCount = 26
+    /// Bonificación por nat de contexto, y su tope (en las mismas unidades que
+    /// la distancia del trazo, en teclas).
+    static let contextWeight = 0.06
+    static let maxContextBonus = 0.3
 
     static func recognize(points raw: [CGPoint],
                           keyCenters: [UInt8: CGPoint],
                           pitch: CGFloat,
-                          limit: Int = 4) -> [String] {
+                          limit: Int = 4,
+                          context: ContextModel.Context? = nil) -> [String] {
 
         // Una sola instantánea para todo el cálculo: los arrays siempre
         // concuerdan entre sí aunque otro hilo recargue el vocabulario.
@@ -98,6 +105,9 @@ enum SwipeRecognizer {
 
             // Bonifica lo que el usuario ya usa y lo muy frecuente.
             score -= Double(priors[i]) / 255.0 * 0.34
+
+            // Y lo que suele venir detrás de la palabra anterior.
+            if let context { score -= min(context.boost(lex.words[i], prior: priors[i]) * contextWeight, maxContextBonus) }
 
             if score < 1.4 { scored.append((score, i)) }
         }
