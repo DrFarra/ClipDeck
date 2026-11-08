@@ -310,6 +310,27 @@ enum WordLearner {
             .map { $0 }
     }
 
+    /// Lo que el usuario escribió detrás de `word`, con las veces (para `ContextModel`).
+    static func successorCounts(of word: String) -> [String: Int] {
+        let prefix = word.lowercased() + " "
+        lock.lock()
+        let dict = bigramsDict()
+        lock.unlock()
+        let blocked = blockedWords()
+        var out: [String: Int] = [:]
+        for (key, count) in dict where key.hasPrefix(prefix) {
+            let next = String(key.dropFirst(prefix.count))
+            if !blocked.contains(next) { out[next] = count }
+        }
+        return out
+    }
+
+    /// El contexto (de partida + aprendido) de la palabra anterior; vacía = inicio de frase.
+    static func context(after previous: String) -> ContextModel.Context {
+        ContextModel.Context(previous: previous,
+                             learned: previous.isEmpty ? [:] : successorCounts(of: previous))
+    }
+
     /// Coincidencias del vocabulario aprendido para un prefijo.
     static func matches(prefix: String, limit: Int) -> [String] {
         let lower = prefix.lowercased()
@@ -336,6 +357,7 @@ enum WordLearner {
         KbPrefs.store.removeObject(forKey: wordsKey)
         KbPrefs.store.removeObject(forKey: bigramsKey)
         KbPrefs.store.removeObject(forKey: protectedKey)
+        EntryMemory.clear()      // los correos y números habituales también
     }
 
     // MARK: Gestión manual (pantalla de palabras aprendidas)
@@ -346,11 +368,14 @@ enum WordLearner {
             .map { (word: $0.key, count: $0.value) }
     }
 
+    /// Lo añadido a mano puede ser un correo o un usuario, más largo que una palabra.
+    static let maxManualLength = 64
+
     /// Añade o actualiza una palabra manualmente (y la desbloquea).
     @discardableResult
     static func addManual(_ word: String, count: Int = 5) -> Bool {
         let clean = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard clean.count >= 2, clean.count <= 24,
+        guard clean.count >= 2, clean.count <= maxManualLength,
               clean.rangeOfCharacter(from: .letters) != nil,
               !clean.contains(" ") else { return false }
         lock.lock()
@@ -372,7 +397,7 @@ enum WordLearner {
     static func rename(_ old: String, to new: String) -> Bool {
         let from = old.lowercased()
         let to = new.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard to.count >= 2, to.count <= 24, to != from,
+        guard to.count >= 2, to.count <= maxManualLength, to != from,
               to.rangeOfCharacter(from: .letters) != nil, !to.contains(" ") else { return false }
         lock.lock()
         var dict = wordsDict()

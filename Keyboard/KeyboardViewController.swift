@@ -24,6 +24,18 @@ extension UIInputView: UIInputViewAudioFeedback {
 final class FeedbackHostView: UIView {
     private var backdropView: UIView?
 
+    /// Cuánto sube el fondo por encima de la vista para tapar el margen que
+    /// deja el sistema (ver `systemTopGap`). Sólo se pinta: no recibe toques.
+    var topOverscan: CGFloat = 0 {
+        didSet { if topOverscan != oldValue { setNeedsLayout() } }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        backdropView?.frame = CGRect(x: 0, y: -topOverscan, width: bounds.width,
+                                     height: bounds.height + topOverscan)
+    }
+
     func applyBackdrop(_ backdrop: KeyboardTheme.Backdrop) {
         backdropView?.removeFromSuperview()
         backdropView = nil
@@ -39,8 +51,7 @@ final class FeedbackHostView: UIView {
         case .gradient(let top, let bottom):
             view = GradientBackdropView(top: top, bottom: bottom)
         }
-        view.frame = bounds
-        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.frame = CGRect(x: 0, y: -topOverscan, width: bounds.width, height: bounds.height + topOverscan)
         view.isUserInteractionEnabled = false
         insertSubview(view, at: 0)
         backdropView = view
@@ -182,6 +193,11 @@ final class KeyboardViewController: UIInputViewController {
     private var swipeStartChar = ""
     private var swipeToken = 0
     private var swipeKeySize: CGSize = .zero
+    /// Lo que suele seguir a la palabra anterior al trazo, y las candidatas en
+    /// vivo mientras se dibuja (una cada vez, como mucho cada 0,12 s).
+    private var swipeContext: ContextModel.Context?
+    private var swipePreviewAt: CFTimeInterval = 0
+    private var swipePreviewBusy = false
     private var lastAreaSize: CGSize = .zero
 
     // Modelo de toque: dónde cae el dedo en cada tecla.
@@ -205,7 +221,7 @@ final class KeyboardViewController: UIInputViewController {
     private let emojiButton = IconTouchButton()
     private var suggestionButtons: [SuggestionButton] = []
     private var confirmOverlay: UIView?
-    private var confirmWord: String?
+    private var confirmAction: (() -> Void)?
     private var separatorViews: [UIView] = []
     private let keyboardArea = KeyAreaView()
     private var keyViews: [KeyRowView] = []
@@ -228,7 +244,10 @@ final class KeyboardViewController: UIInputViewController {
         // El fondo lo pone el tema (ver `FeedbackHostView`).
         view.backgroundColor = .clear
         inputView?.allowsSelfSizing = true
+        // El fondo puede asomar por encima de la vista (ver `systemTopGap`).
+        view.clipsToBounds = false
         root = FeedbackHostView(frame: view.bounds)
+        root.clipsToBounds = false
         root.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(root)
         NSLayoutConstraint.activate([
@@ -339,7 +358,15 @@ final class KeyboardViewController: UIInputViewController {
         noteOwnEdit()
         haptic.prepare()
         if mode == .keys { showKeyboard() }
+        reloadLearnedWords()
         loadSupplementaryLexicon()
+    }
+
+    /// Lo añadido en la app (p. ej. tu correo) vive en disco; sin releerlo, el
+    /// teclado seguía con su copia vieja y al guardar la suya lo borraba.
+    private func reloadLearnedWords() {
+        WordLearner.flush()
+        WordLearner.invalidateCache()
     }
 
     /// Recarga las preferencias por si cambiaron en la app y, si cambiaron,
@@ -370,6 +397,7 @@ final class KeyboardViewController: UIInputViewController {
 
     @objc private func hostWillEnterForeground() {
         captureIfCopied()
+        reloadLearnedWords()
         loadSupplementaryLexicon()
         guard reloadConfig() else { return }
         applyInputTraits()
@@ -378,6 +406,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        root.topOverscan = systemTopGap()
         releaseEdgeTouches()
         // Lo que no hace falta para teclear, después de que el teclado se vea:
         // si la apertura tarda demasiado, la app anfitriona lo cierra.
@@ -425,6 +454,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        rememberEntries(whole: true)
         stopCaptureTimer()
         if searching { endSearch(then: .keys) }
         // Guardar lo aprendido antes de que el sistema descargue el teclado.
@@ -461,6 +491,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        root.topOverscan = systemTopGap()
         layoutAll()
         releaseEdgeTouches()
     }
@@ -491,7 +522,31 @@ final class KeyboardViewController: UIInputViewController {
         if let c = heightConstraint, c.constant != h { c.constant = h }
     }
 
+    /// En apps con la barra de escribir pegada al teclado (WhatsApp), iOS 26
+    /// deja un margen entre el borde de su cristal y nuestra vista: se veía una
+    /// franja de otro color, como si hubiera otro teclado debajo. Es el hueco
+    /// que hay que cubrir con nuestro fondo. Sólo cuenta uno pequeño dentro de
+    /// una vista del mismo ancho: nunca la barra de la app.
+    private func systemTopGap() -> CGFloat {
+        var offset: CGFloat = 0
+        var current: UIView = view
+        for _ in 0..<3 {
+            guard let parent = current.superview, abs(parent.bounds.width - view.bounds.width) < 1 else { break }
+            offset += current.frame.minY
+            if offset > 0.5 { return offset <= 40 ? offset : 0 }
+            current = parent
+        }
+        return 0
+    }
+
     // MARK: Campo de texto de la app
+
+    override func textWillChange(_ textInput: UITextInput?) {
+        super.textWillChange(textInput)
+        // La app va a cambiar el texto (enviar, cambiar de campo…): lo que
+        // hubiera escrito aún se puede leer.
+        rememberEntries(whole: false)
+    }
 
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
@@ -576,6 +631,75 @@ final class KeyboardViewController: UIInputViewController {
 
     private var learningActive: Bool {
         config.learnWords && !fieldIsLiteral && textDocumentProxy.autocorrectionType != .no
+    }
+
+    // MARK: Correos y números habituales (EntryMemory)
+
+    /// El campo pide un correo o un teléfono; nil si es texto normal.
+    private var entryField: EntryMemory.Kind? {
+        if let t = contentType {
+            if t == .emailAddress { return .email }
+            if t == .telephoneNumber { return .number }
+        }
+        switch textDocumentProxy.keyboardType ?? .default {
+        case .emailAddress: return .email
+        case .phonePad, .numberPad, .asciiCapableNumberPad: return .number
+        default: return nil
+        }
+    }
+
+    /// Nunca se recuerda nada de contraseñas, códigos de un solo uso ni tarjetas.
+    private var entryLearningActive: Bool {
+        let sensitive: [UITextContentType] = [.password, .newPassword, .oneTimeCode, .creditCardNumber]
+        guard config.learnWords, !searching else { return false }
+        if let t = contentType, sensitive.contains(t) { return false }
+        return true
+    }
+
+    /// Lo ya contado en este campo: cada correo o número suma un uso por campo.
+    private var rememberedEntries = Set<String>()
+    private var rememberedEpoch = -1
+    /// La barra está proponiendo correos o números (no palabras).
+    private var entryToken: String?
+
+    /// Lo escrito desde el último espacio: la «@» y el punto no parten un correo.
+    private func entryTokenBeforeCursor() -> String {
+        var token = ""
+        for c in (textDocumentProxy.documentContextBeforeInput ?? "").reversed() {
+            if c.isWhitespace { break }
+            token.insert(c, at: token.startIndex)
+        }
+        return token
+    }
+
+    private func syncRememberedEpoch() {
+        if rememberedEpoch != documentEpoch { rememberedEpoch = documentEpoch; rememberedEntries = [] }
+    }
+
+    /// Anota los correos y números del campo. Con `whole == false` se salta el
+    /// fragmento junto al cursor: puede estar a medio escribir («ana@gmail.co»).
+    private func rememberEntries(whole: Bool) {
+        guard entryLearningActive else { return }
+        syncRememberedEpoch()
+        var before = textDocumentProxy.documentContextBeforeInput ?? ""
+        var after = textDocumentProxy.documentContextAfterInput ?? ""
+        if !whole {
+            while let c = before.last, !c.isWhitespace { before.removeLast() }
+            while let c = after.first, !c.isWhitespace { after.removeFirst() }
+        }
+        let found = EntryMemory.extract(before + " " + after).filter {
+            rememberedEntries.insert(EntryMemory.key($0.text, $0.kind)).inserted
+        }
+        guard !found.isEmpty else { return }
+        Self.textQueue.async { EntryMemory.remember(found) }
+    }
+
+    /// Correos o números que proponer ahora mismo, y el fragmento que sustituyen.
+    private func entrySuggestions() -> (token: String, words: [String])? {
+        guard config.learnWords else { return nil }
+        let token = entryTokenBeforeCursor()
+        let words = EntryMemory.suggestions(for: token, field: entryField, in: EntryMemory.all())
+        return words.isEmpty ? nil : (token, words)
     }
 
     private static func numPad(for type: UIKeyboardType?) -> NumPad? {
@@ -1518,6 +1642,9 @@ final class KeyboardViewController: UIInputViewController {
         selectionFeedback()
         rebuildSwipeGeometry()
         swipePoints = [point]
+        // previousWord: vale tanto si iOS ya refleja el borrado de la letra de arranque como si no.
+        swipeContext = WordLearner.context(after: TextRules.previousWord(in: textDocumentProxy.documentContextBeforeInput ?? ""))
+        swipePreviewAt = CACurrentMediaTime()
 
         let trail: SwipeTrailView
         if let existing = swipeTrail {
@@ -1535,9 +1662,34 @@ final class KeyboardViewController: UIInputViewController {
 
     func swipeMove(to point: CGPoint) {
         guard swipeActive else { return }
+        // Salir del teclado por arriba no es una palabra: es el gesto de
+        // inicio o de multitarea de iOS que empezó sobre una tecla.
+        if point.y < 0 { endSwipe(cancelled: true); return }
         if let last = swipePoints.last, hypot(point.x - last.x, point.y - last.y) < 2 { return }
         swipePoints.append(point)
         swipeTrail?.add(point)
+        previewSwipe()
+    }
+
+    /// Candidatas en la barra mientras el dedo aún dibuja, para ver si va bien.
+    private func previewSwipe() {
+        let now = CACurrentMediaTime()
+        guard !swipePreviewBusy, now - swipePreviewAt > 0.12, swipePoints.count > 6 else { return }
+        swipePreviewAt = now
+        swipePreviewBusy = true
+        let points = swipePoints, centers = swipeCenters, pitch = swipePitch
+        let token = swipeToken, context = swipeContext
+        let capitalize = swipeStartChar.first?.isUppercase == true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let words = SwipeRecognizer.recognize(points: points, keyCenters: centers, pitch: pitch,
+                                                  limit: 3, context: context)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.swipePreviewBusy = false
+                guard self.swipeActive, self.swipeToken == token, !words.isEmpty else { return }
+                self.setSuggestions(words.map { capitalize ? $0.prefix(1).uppercased() + $0.dropFirst() : $0 })
+            }
+        }
     }
 
     func endSwipe(cancelled: Bool) {
@@ -1550,8 +1702,11 @@ final class KeyboardViewController: UIInputViewController {
         let startChar = swipeStartChar
         swipeStartChar = ""
 
+        // Cancelado (el sistema se quedó el toque) o fuera del teclado: no se
+        // escribe nada, ni siquiera la letra donde empezó.
+        if cancelled { scheduleSuggestions(); return }
         let long = SwipeRecognizer.traceLength(points) > swipePitch * 1.6
-        guard !cancelled, points.count > 3, long else {
+        guard points.count > 3, long else {
             restoreSwipeStart(startChar)
             return
         }
@@ -1560,8 +1715,10 @@ final class KeyboardViewController: UIInputViewController {
         let token = swipeToken
         let centers = swipeCenters
         let pitch = swipePitch
+        let context = swipeContext
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let words = SwipeRecognizer.recognize(points: points, keyCenters: centers, pitch: pitch)
+            let words = SwipeRecognizer.recognize(points: points, keyCenters: centers, pitch: pitch,
+                                                  context: context)
             DispatchQueue.main.async {
                 guard let self, self.swipeToken == token else { return }
                 self.applySwipe(words, startChar: startChar)
@@ -1655,6 +1812,7 @@ final class KeyboardViewController: UIInputViewController {
             endSearch(then: target == .clips ? .clipboard : .keys)
             return
         }
+        rememberEntries(whole: true)
         commit("\n")
     }
 
@@ -1828,7 +1986,8 @@ final class KeyboardViewController: UIInputViewController {
         let primary = dominantLanguage(words.suffix(12))
         return SmartCorrector.correction(input, lexicon: lex,
                                          spelling: { spelling(of: $0, primary: primary) },
-                                         guesses: { guesses(for: $0, primary: primary) })
+                                         guesses: { guesses(for: $0, primary: primary) },
+                                         successors: { WordLearner.context(after: $0).likely(5) })
     }
 
     /// Sugerencias del corrector del sistema, primero las del idioma del texto.
@@ -1968,12 +2127,19 @@ final class KeyboardViewController: UIInputViewController {
     /// que el corrector no bloquee nunca la siguiente pulsación de tecla.
     private func scheduleSuggestions() {
         guard !searching else { return }
+        if mode == .keys, let entries = entrySuggestions() {
+            suggestionWork?.cancel()
+            setSuggestions(entries.words)
+            entryToken = entries.token
+            return
+        }
         guard config.prediction, numPad == nil else { setSuggestions([]); return }
         suggestionWork?.cancel()
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         let lex = lexicon
         let shortcuts = correctionActive ? replacements : [:]
         let capNext = shift != .off
+        let touches = wordTouches, centers = swipeCenters, keySize = swipeKeySize
         let word = TextRules.wordBefore(before)
         // Con el cursor en medio de una palabra no hay nada que adelantar.
         let insideWord = textDocumentProxy.documentContextAfterInput?.first?.isLetter == true
@@ -1982,7 +2148,9 @@ final class KeyboardViewController: UIInputViewController {
         let work = DispatchWorkItem {
             let result = KeyboardViewController.computeSuggestions(before: before, lexicon: lex,
                                                                   replacements: shortcuts,
-                                                                  capitalizeNext: capNext)
+                                                                  capitalizeNext: capNext,
+                                                                  touches: touches, keyCenters: centers,
+                                                                  keySize: keySize)
             let planned = job.map { (word: $0.input.word, fix: KeyboardViewController.runCorrection($0)) }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.mode == .keys, !self.searching else { return }
@@ -2000,7 +2168,9 @@ final class KeyboardViewController: UIInputViewController {
     /// que son la palabra siguiente, no completados de la que se escribe.
     private static func computeSuggestions(before: String, lexicon: [String],
                                            replacements: [String: String],
-                                           capitalizeNext: Bool) -> (words: [String], next: Bool) {
+                                           capitalizeNext: Bool,
+                                           touches: [CGPoint] = [], keyCenters: [UInt8: CGPoint] = [:],
+                                           keySize: CGSize = .zero) -> (words: [String], next: Bool) {
         let word = TextRules.wordBefore(before)
         if word.isEmpty || word.rangeOfCharacter(from: .letters) == nil {
             return (nextWords(lastWord: TextRules.lastCompleteWord(in: before), capitalizeNext: capitalizeNext), true)
@@ -2012,6 +2182,16 @@ final class KeyboardViewController: UIInputViewController {
         // La sustitución de texto del usuario va primero y tal cual.
         let pinned = replacements[lower].map { [$0] } ?? []
         var results: [String] = []
+
+        // Primero las del vocabulario por probabilidad en contexto, tolerando
+        // el dedo en la tecla vecina; luego, de reserva, lo de siempre.
+        if let snapshot = SwipeLexicon.shared.snapshot {
+            let head = String(before.dropLast(word.count))
+            results += ContextModel.completions(for: word, touches: touches, keyCenters: keyCenters,
+                                                keySize: keySize,
+                                                context: WordLearner.context(after: TextRules.lastCompleteWord(in: head)),
+                                                lexicon: snapshot)
+        }
 
         if word.count < 2 {
             // Con una sola letra: lo que suele seguir a la palabra anterior y
@@ -2055,15 +2235,14 @@ final class KeyboardViewController: UIInputViewController {
         return (unique, false)
     }
 
+    /// La siguiente palabra más probable detrás de `lastWord` (vacía = inicio
+    /// de frase): lo aprendido, las frases de partida y la frecuencia.
     private static func nextWords(lastWord: String, capitalizeNext: Bool) -> [String] {
-        var r: [String] = []
-        if !lastWord.isEmpty { r += WordLearner.successors(of: lastWord) }
-        let blocked = WordLearner.blockedWords()
-        for w in KbData.commonWords {
-            if r.count >= 3 { break }
-            if !r.contains(w) && !blocked.contains(w) { r.append(w) }
-        }
-        return Array(r.prefix(3)).map { capitalizeNext ? $0.prefix(1).uppercased() + $0.dropFirst() : $0 }
+        let r = ContextModel.nextWords(WordLearner.context(after: lastWord),
+                                       lexicon: SwipeLexicon.shared.snapshot,
+                                       common: KbData.commonWords,
+                                       blocked: WordLearner.blockedWords())
+        return r.map { capitalizeNext ? $0.prefix(1).uppercased() + $0.dropFirst() : $0 }
     }
 
     /// La barra muestra la palabra siguiente: tocarla no reemplaza nada.
@@ -2079,6 +2258,7 @@ final class KeyboardViewController: UIInputViewController {
     private func setSuggestions(_ words: [String], nextWords: Bool = false,
                                 correction: (word: String, fix: String?)? = nil) {
         guard !searching else { return }
+        entryToken = nil
         suggestionsAreNextWords = nextWords
         plannedCorrection = correction
         var titles = words
@@ -2089,9 +2269,13 @@ final class KeyboardViewController: UIInputViewController {
         } else if mode == .keys, let correction, let fix = correction.fix {
             // Como iOS: lo tecleado entre comillas para dejarlo así, y en el
             // centro, resaltado, lo que pondrá el espacio.
-            let others = words.filter { $0.lowercased() != fix.lowercased() }
+            // La corrección reemplaza la palabra. Si las demás eran «palabra
+            // siguiente», se quitan: con ellas la barra entera se trataba como
+            // tal y tocar la corrección la ponía detrás de la errata.
+            let others = nextWords ? [] : words.filter { $0.lowercased() != fix.lowercased() }
             titles = [Self.keepTitle(correction.word), fix] + others.prefix(1)
             emphasized = 1
+            suggestionsAreNextWords = false
         } else if mode == .keys, currentWord().isEmpty, let kind = recentPasteKind() {
             // Lo recién copiado ocupa la barra entera: nada de predicciones al lado.
             paste = kind
@@ -2117,6 +2301,23 @@ final class KeyboardViewController: UIInputViewController {
         wordTouches.removeAll(keepingCapacity: true)
         if title.hasPrefix("↺ ") {
             undoAutocorrect(fromBackspace: false)
+            return
+        }
+        if entryToken != nil {
+            deleteBack(entryTokenBeforeCursor().count)
+            // En un campo de correo o teléfono no hace falta espacio detrás.
+            put(entryField == nil ? title + " " : title)
+            autoSpaceInserted = entryField == nil
+            if let kind = EntryMemory.extract(title).first?.kind {
+                syncRememberedEpoch()
+                if rememberedEntries.insert(EntryMemory.key(title, kind)).inserted {
+                    Self.textQueue.async { EntryMemory.remember([(title, kind)]) }
+                }
+            }
+            pendingRevert = nil
+            justSwiped = nil
+            updateShiftFromContext()
+            scheduleSuggestions()
             return
         }
         if let planned = plannedCorrection, planned.fix != nil, title == Self.keepTitle(planned.word) {
@@ -2164,7 +2365,11 @@ final class KeyboardViewController: UIInputViewController {
         if word.hasPrefix("↺ ") { word = String(word.dropFirst(2)) }
         guard !word.isEmpty else { return }
         keyFeedback()
-        showForgetConfirm(word: word)
+        showConfirm("¿Olvidar «\(word)»?\nNo se volverá a sugerir.", button: "Olvidar") { [weak self] in
+            if !EntryMemory.forget(word) { WordLearner.forget(word) }
+            self?.showHint("«\(word)» ya no se sugerirá")
+            self?.scheduleSuggestions()
+        }
     }
 
     // MARK: Pegar lo recién copiado
@@ -2406,9 +2611,9 @@ final class KeyboardViewController: UIInputViewController {
     // MARK: Confirmación para olvidar una sugerencia (sin UIAlertController, no
     // disponible en teclados: se dibuja dentro del propio teclado).
 
-    private func showForgetConfirm(word: String) {
+    private func showConfirm(_ message: String, button: String, action: @escaping () -> Void) {
         dismissConfirm()
-        confirmWord = word
+        confirmAction = action
 
         let dim = UIView(frame: root.bounds)
         dim.backgroundColor = UIColor.black.withAlphaComponent(0.35)
@@ -2429,7 +2634,7 @@ final class KeyboardViewController: UIInputViewController {
         label.numberOfLines = 2
         label.textAlignment = .center
         label.font = .systemFont(ofSize: 15)
-        label.text = "¿Olvidar «\(word)»?\nNo se volverá a sugerir."
+        label.text = message
         label.textColor = KeyStyle.theme.text
         card.addSubview(label)
 
@@ -2441,11 +2646,11 @@ final class KeyboardViewController: UIInputViewController {
         card.addSubview(cancel)
 
         let confirm = UIButton(type: .system)
-        confirm.setTitle("Olvidar", for: .normal)
+        confirm.setTitle(button, for: .normal)
         confirm.setTitleColor(.systemRed, for: .normal)
         confirm.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
         confirm.frame = CGRect(x: cardW / 2 + 5, y: cardH - 46, width: cardW / 2 - 15, height: 38)
-        confirm.addTarget(self, action: #selector(confirmForgetAction), for: .touchUpInside)
+        confirm.addTarget(self, action: #selector(confirmTapped), for: .touchUpInside)
         card.addSubview(confirm)
 
         confirmOverlay = dim
@@ -2454,16 +2659,13 @@ final class KeyboardViewController: UIInputViewController {
     @objc private func dismissConfirm() {
         confirmOverlay?.removeFromSuperview()
         confirmOverlay = nil
-        confirmWord = nil
+        confirmAction = nil
     }
 
-    @objc private func confirmForgetAction() {
-        if let w = confirmWord {
-            WordLearner.forget(w)
-            showHint("«\(w)» ya no se sugerirá")
-        }
+    @objc private func confirmTapped() {
+        let action = confirmAction
         dismissConfirm()
-        scheduleSuggestions()
+        action?()
     }
 
     private static func autocorrection(for word: String) -> String? {
@@ -2671,7 +2873,34 @@ final class KeyboardViewController: UIInputViewController {
                                   self.snapshotsAt = Date()
                                   self.refreshMode()
                               },
-                              onPick: { [weak self] snap in self?.pickClip(snap) })
+                              onPick: { [weak self] snap in self?.pickClip(snap) },
+                              onDelete: { [weak self] snap in
+                                  guard let self else { return }
+                                  self.longPressFeedback()
+                                  self.showConfirm("¿Eliminar del historial?\nNo se puede deshacer.",
+                                                   button: "Eliminar") { [weak self] in self?.deleteClip(snap.id) }
+                              })
+    }
+
+    /// Lo mismo que «Eliminar» en la app, sin tener que abrirla.
+    private func deleteClip(_ id: UUID) {
+        guard let container = clipContainer else { return }
+        let context = ModelContext(container)
+        guard let item = CaptureService.findByID(id, context: context) else {
+            showHint("No se encontró en el historial")
+            return
+        }
+        context.delete(item)
+        guard (try? context.save()) != nil else {
+            showHint("No se pudo eliminar")
+            return
+        }
+        CaptureService.updateWidget(context: context)
+        allSnapshots.removeAll { $0.id == id }
+        thumbnails[id] = nil
+        searchTextCache[id] = nil
+        snapshotsAt = Date()
+        refreshMode()
     }
 
     private func pickClip(_ snap: ClipSnapshot) {
@@ -3452,7 +3681,9 @@ final class KeyView: UIView {
         if spec.kind == .space, let controller, controller.trackpadEnabled {
             let x = t.location(in: superview).x
             let dx = x - spaceStartX
-            if !spaceTracking && abs(dx) > 16 {
+            // Al escribir rápido el pulgar resbala en el espacio al soltarlo:
+            // sin la espera, eso movía el cursor dentro de la palabra.
+            if !spaceTracking && abs(dx) > 16 && CACurrentMediaTime() - pressStart > 0.2 {
                 spaceTracking = true
                 trackpadTimer?.invalidate(); trackpadTimer = nil
             }
@@ -3664,6 +3895,7 @@ struct ClipboardPanel: View {
     let onSearch: () -> Void
     let onClearQuery: () -> Void
     let onPick: (ClipSnapshot) -> Void
+    let onDelete: (ClipSnapshot) -> Void
 
     var body: some View {
         Group {
@@ -3700,6 +3932,8 @@ struct ClipboardPanel: View {
                                     card(snap)
                                         .contentShape(Rectangle())
                                         .onTapGesture { onPick(snap) }
+                                        .onLongPressGesture { onDelete(snap) }
+                                        .accessibilityAction(named: "Eliminar") { onDelete(snap) }
                                 }
                             }
                             .padding([.horizontal, .bottom], 6)

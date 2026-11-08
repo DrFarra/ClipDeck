@@ -280,6 +280,15 @@ final class WordLearnerTests: XCTestCase {
         // Tampoco pasa a proponerse al escribir.
         XCTAssertTrue(WordLearner.matches(prefix: "mor", limit: 3).isEmpty)
     }
+
+    func testCorreoAnadidoEnLaAppLlegaAlTeclado() {
+        let correo = "nombre.apellido.largo2026@ejemplo.com"  // más de 24 caracteres y con números
+        _ = WordLearner.learnedWords()  // el teclado ya tenía su copia en memoria
+        XCTAssertTrue(WordLearner.addManual(correo))
+        // Otro proceso: lo escrito en disco solo se ve tras releer.
+        WordLearner.invalidateCache()
+        XCTAssertEqual(WordLearner.matches(prefix: "nom", limit: 3), [correo])
+    }
 }
 
 // MARK: - Vocabulario de deslizamiento
